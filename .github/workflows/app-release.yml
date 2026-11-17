@@ -77,7 +77,7 @@ on:
       version:
         value: ${{ jobs.version.outputs.version }}
 
-# The caller grants contents: write for the release; only the release job gets it.
+# The caller grants contents: write for the release; only the release job keeps it.
 # The jobs that run the app's own code (its dependencies, pre-build) can read, no more,
 # and no checkout leaves a token on disk.
 jobs:
@@ -168,8 +168,8 @@ jobs:
   release:
     needs: [version, build]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    # No permissions here: it gets what the caller grants (contents: write to
+    # publish). Asking for write itself would stop a caller that only builds.
     env:
       TAG: ${{ needs.version.outputs.tag }}
       VERSION: ${{ needs.version.outputs.version }}
