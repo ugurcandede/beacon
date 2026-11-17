@@ -25,7 +25,7 @@ UI = f"https://eu.posthog.com/project/{PROJECT}"
 # Products with an app sending through beacon: one dashboard each. The sites
 # use the same names for the product pages; `home` and `tools` are site-only.
 PRODUCTS = {"lumea": "Lumea", "sotto": "sotto", "taplock": "TapLock"}
-SITES = {"apps": "https://ugurcandede.github.io/apps"}
+SITES = {"apps": "https://ugurcandede.github.io/apps", "portfolio": "https://ugurcandede.github.io"}
 
 # Recorded by beacon or PostHog themselves; "what people do" leaves them out.
 SYSTEM_EVENTS = ["heartbeat", "daily_active", "app_open", "app_quit", "first_launch", "app_updated",
@@ -268,6 +268,8 @@ def websites():
         "## Trafik",
         ("Ziyaretçi ve sayfa görüntüleme", "",
          trends([event("$pageview", "dau", [WEB]), event("$pageview", "total", [WEB])], compare=True), 6, 5),
+        ("Sitelere göre ziyaretçi", "apps ve portföy.", trends([event("$pageview", "dau", [WEB])], breakdown="site",
+                                                                display="ActionsLineGraph"), 6, 5),
         ("Ürün sayfalarına göre ziyaretçi", "", trends([event("$pageview", "dau", [WEB])], breakdown="product",
                                                         display="ActionsBar"), 6, 5),
         ("En çok görüntülenen sayfalar", "", trends([event("$pageview", "total", [WEB])], display="ActionsTable",
