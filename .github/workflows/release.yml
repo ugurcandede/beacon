@@ -1,0 +1,56 @@
+name: Release beacon
+
+# Push a tag v1.4.0 to release beacon itself: the versions must agree
+# (check-version), the CI pipeline's tests and checks pass (no deploy: not main), the Python package goes to PyPI (trusted
+# publishing: the PyPI project must list this workflow), a GitHub release takes
+# the CHANGELOG section as notes, and the major tag (v1) moves here, so apps on
+# `@v1` get the actions' fixes. SwiftPM needs nothing more: the tag is the version.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      notes: ${{ steps.check.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        run: |
+          notes=$(PYTHONPATH=python python3 -m beacon.release check-version "$GITHUB_REF_NAME")
+          { echo "notes<<EOF"; echo "$notes"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: check
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  pypi:
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m pip install build && python3 -m build python
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist
+
+  github:
+    needs: [check, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ needs.check.outputs.notes }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "beacon $GITHUB_REF_NAME" --notes "$NOTES"
+          major="${GITHUB_REF_NAME%%.*}"
+          git tag -f "$major" "$GITHUB_REF_NAME"
+          git push -f origin "refs/tags/$major"

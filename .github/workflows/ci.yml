@@ -1,0 +1,418 @@
+name: CI
+
+# One pipeline per push, in stages; a stage starts only when the one before
+# it passed:
+#   1. fast tests     python (macOS, Windows) + dashboards, swift, worker
+#   2. heavy checks   the release actions as an app's release job runs them, and
+#                     the reusable app release on both demos;
+#                     the Windows self-update end to end (Nuitka)
+#   3. deploy         the Worker, on main only
+# release.yml runs stages 1 and 2 before releasing beacon itself.
+on:
+  push:
+    branches: ["**"]
+    paths-ignore: ["**/*.md", "docs/**"]   # a docs-only change runs nothing
+  pull_request:
+    paths-ignore: ["**/*.md", "docs/**"]
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A newer push to a branch makes the older run pointless; main runs to the end.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # ---- 1. fast tests ---------------------------------------------------------
+
+  python:
+    name: python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The apps ship for macOS and Windows only; the manifest vector has no linux key.
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e python pytest PySide6   # PySide6 for beacon.qt
+      - run: pytest -q python/tests
+      - run: pytest -q posthog   # the dashboard definitions; queries are checked with setup.py --check
+
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: swift test
+        working-directory: swift
+
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx tsc -p .
+      - run: npm test
+
+  # ---- 2. heavy checks -------------------------------------------------------
+  # release-*: the actions in .github/actions, run the way an app's release job
+  # runs them. manifest: signed with a throwaway key, verifies, a key not the
+  # app's is refused, the key can come from beacon.toml. version: from known
+  # tags on three OSes. cask: against a throwaway tap. codesign: two versions
+  # signed by one certificate are the same app to macOS (same designated
+  # requirement), so permissions survive an update.
+
+  release-manifest:
+    needs: [python, swift, worker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Throwaway keys and assets
+        id: keys
+        run: |
+          keys=$(PYTHONPATH=python python3 -m beacon.release keygen)
+          echo "::add-mask::$(awk '/^private/ {print $NF}' <<<"$keys")"
+          echo "private=$(awk '/^private/ {print $NF}' <<<"$keys")" >> "$GITHUB_OUTPUT"
+          echo "public=$(awk '/^public/ {print $NF}' <<<"$keys")" >> "$GITHUB_OUTPUT"
+          other=$(PYTHONPATH=python python3 -m beacon.release keygen)
+          echo "::add-mask::$(awk '/^private/ {print $NF}' <<<"$other")"
+          echo "other=$(awk '/^private/ {print $NF}' <<<"$other")" >> "$GITHUB_OUTPUT"
+          mkdir -p dist && echo "exe" > dist/App.exe && echo "zip" > dist/App.zip
+      - uses: ./.github/actions/release
+        id: release
+        with:
+          tag: v1.2.3
+          signing-key: ${{ steps.keys.outputs.private }}
+          public-key: ${{ steps.keys.outputs.public }}
+          out: out
+          assets: |
+            windows-x64=dist/App.exe
+            macos-arm64=dist/App.zip
+      - name: The manifest verifies with the app's key
+        env:
+          PUBLIC: ${{ steps.keys.outputs.public }}
+        run: |
+          cat "${{ steps.release.outputs.manifest }}"
+          PYTHONPATH=python python3 - <<'PY'
+          import base64, os
+          from beacon import _ed25519
+          data = open("out/update.json", "rb").read()
+          sig = base64.b64decode(open("out/update.json.sig").read())
+          assert _ed25519.verify(base64.b64decode(os.environ["PUBLIC"]), data, sig), "signature does not verify"
+          assert b'"version": "1.2.3"' in data and b"releases/download/v1.2.3/App.exe" in data
+          print("manifest verifies")
+          PY
+      - name: The app's beacon.toml holds its public key
+        run: printf 'name = "App"\nid = "x"\npublic_key = "%s"\n' "${{ steps.keys.outputs.public }}" > beacon.toml
+      - uses: ./.github/actions/release
+        with:
+          tag: v1.2.3
+          signing-key: ${{ steps.keys.outputs.private }}
+          out: from-toml
+          assets: windows-x64=dist/App.exe
+      - run: test -s from-toml/update.json.sig
+      - uses: ./.github/actions/release
+        with:
+          tag: v1.2.3
+          signing-key: ${{ steps.keys.outputs.private }}
+          out: staged
+          rollout: 10
+          assets: windows-x64=dist/App.exe
+      - name: A staged release carries its rollout, a full one none
+        run: |
+          grep -q '"rollout": 10' staged/update.json
+          ! grep -q rollout from-toml/update.json
+      - uses: ./.github/actions/release
+        id: beta
+        with:
+          tag: v1.3.0
+          signing-key: ${{ steps.keys.outputs.private }}
+          out: beta
+          channel: beta
+          min-version: 1.0.0
+          assets: windows-x64=dist/App.exe
+      - name: A beta release writes update-beta.json, with its minimum version
+        run: |
+          test "${{ steps.beta.outputs.manifest }}" = beta/update-beta.json
+          test -s beta/update-beta.json.sig && test ! -e beta/update.json
+          grep -q '"min_version": "1.0.0"' beta/update-beta.json
+      - name: A signing key that is not the app's is refused
+        # Checked on the command the action runs: a step that fails on purpose
+        # shows as an error in the run even when the job passes.
+        env:
+          BEACON_SIGNING_KEY: ${{ steps.keys.outputs.other }}
+          PUBLIC: ${{ steps.keys.outputs.public }}
+        run: |
+          if PYTHONPATH=python python3 -m beacon.release manifest --repo me/app --tag v1.2.3 --out wrong \
+              --public-key "$PUBLIC" windows-x64=dist/App.exe 2>err.txt; then
+            echo "::error::signed with a key that is not the app's"; exit 1
+          fi
+          grep -q "does not belong" err.txt
+          test ! -e wrong/update.json.sig
+          echo "mismatched key refused"
+
+  release-version:
+    needs: [python, swift, worker]
+    name: release-version (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: beacon
+      - name: The workspace as an app repo with a release and a push of two commits
+        id: app
+        run: |
+          g() { git -c user.name=t -c user.email=t@t "$@"; }
+          git init -q && g commit -q --allow-empty -m "fix: a" && g tag v2.5.0
+          echo "before=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          g commit -q --allow-empty -m "feat: b" && g commit -q --allow-empty -m "fix: c"
+      - id: version
+        uses: ./beacon/.github/actions/version
+        with:
+          since: ${{ steps.app.outputs.before }}
+      - run: test "${{ steps.version.outputs.tag }} ${{ steps.version.outputs.version }}" = "v2.6.0 2.6.0"
+
+  release-cask:
+    needs: [python, swift, worker]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: A throwaway tap holding a cask
+        run: |
+          g() { git -c user.name=t -c user.email=t@t "$@"; }
+          git init -q --bare -b main "$RUNNER_TEMP/tap.git"
+          git clone -q "$RUNNER_TEMP/tap.git" "$RUNNER_TEMP/seed"
+          mkdir "$RUNNER_TEMP/seed/Casks"
+          printf 'cask "demo" do\n  version "1.0.0"\n  sha256 "old"\nend\n' > "$RUNNER_TEMP/seed/Casks/demo.rb"
+          (cd "$RUNNER_TEMP/seed" && g add . && g commit -qm init && git push -q origin HEAD:main)
+          echo zip > demo.zip
+          # The action clones github.com/<tap>; send that to the throwaway one.
+          git config --global url."file://$RUNNER_TEMP/tap.git".insteadOf "https://x-access-token:tok@github.com/me/tap.git"
+          git config --global user.name t && git config --global user.email t@t
+      - uses: ./.github/actions/cask
+        with:
+          cask: demo
+          version: 1.1.0
+          asset: demo.zip
+          token: tok
+          tap: me/tap
+      - name: The tap points at the new release
+        run: |
+          git --git-dir="$RUNNER_TEMP/tap.git" show main:Casks/demo.rb | tee /dev/stderr | grep -q 'version "1.1.0"'
+          git --git-dir="$RUNNER_TEMP/tap.git" show main:Casks/demo.rb | grep -q "sha256 \"$(shasum -a 256 demo.zip | cut -d' ' -f1)\""
+
+  release-codesign:
+    needs: [python, swift, worker]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: A throwaway certificate, as the owner makes theirs once
+        id: cert
+        run: |
+          PYTHONPATH=python python3 -m beacon.release codesign-cert --name "beacon test" --out "$RUNNER_TEMP/cert" > "$RUNNER_TEMP/cert.txt"
+          echo "::add-mask::$(awk '/PASSWORD/ {print $2}' "$RUNNER_TEMP/cert.txt")"
+          echo "::add-mask::$(awk '/P12:/ {print $2}' "$RUNNER_TEMP/cert.txt")"
+          echo "password=$(awk '/PASSWORD/ {print $2}' "$RUNNER_TEMP/cert.txt")" >> "$GITHUB_OUTPUT"
+          { echo "p12<<EOF"; awk '/P12:/ {print $2}' "$RUNNER_TEMP/cert.txt"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/codesign
+        with:
+          p12: ${{ steps.cert.outputs.p12 }}
+          password: ${{ steps.cert.outputs.password }}
+      - name: Two versions of the Swift demo, signed by it
+        run: |
+          echo '{"version": "x"}' > examples/demo-swift/demo_config.json
+          for v in 1.0.0 1.0.1; do
+            PYTHONPATH=python python3 -m beacon.build --version $v --config examples/demo-swift/beacon.toml --out "$RUNNER_TEMP/$v"
+            ditto -x -k "$RUNNER_TEMP/$v/BeaconDemoSwift-macos.zip" "$RUNNER_TEMP/app-$v"
+            codesign -d -r- "$RUNNER_TEMP/app-$v/BeaconDemoSwift.app" 2>&1 | grep designated | tee "$RUNNER_TEMP/req-$v"
+          done
+      - name: Same designated requirement, tied to the certificate
+        run: |
+          diff "$RUNNER_TEMP/req-1.0.0" "$RUNNER_TEMP/req-1.0.1"
+          grep -q 'certificate leaf' "$RUNNER_TEMP/req-1.0.0"
+          echo "both versions are the same app to macOS"
+
+  release-control:
+    # The control action against a published release, with a gh that serves
+    # the release from a folder.
+    needs: [python, swift, worker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: A published release, and a stand-in gh
+        id: keys
+        run: |
+          keys=$(PYTHONPATH=python python3 -m beacon.release keygen)
+          private=$(awk '/^private/ {print $NF}' <<<"$keys")
+          echo "::add-mask::$private"
+          echo "private=$private" >> "$GITHUB_OUTPUT"
+          echo "public=$(awk '/^public/ {print $NF}' <<<"$keys")" >> "$GITHUB_OUTPUT"
+          other=$(awk '/^private/ {print $NF}' <<<"$(PYTHONPATH=python python3 -m beacon.release keygen)")
+          echo "::add-mask::$other"
+          echo "other=$other" >> "$GITHUB_OUTPUT"
+          mkdir -p dist release fakebin && echo zip > dist/App.zip
+          PYTHONPATH=python BEACON_SIGNING_KEY=$private python3 -m beacon.release manifest --repo me/app --tag v1.0.0 \
+            --out release --public-key "$(awk '/^public/ {print $NF}' <<<"$keys")" macos-arm64=dist/App.zip
+          cat > fakebin/gh <<'GH'
+          #!/bin/bash
+          # gh as the action calls it; the release is the folder release/.
+          echo "$*" >> "$GITHUB_WORKSPACE/gh-calls.log"
+          case "$1 $2" in
+            "release view") echo v1.0.0 ;;
+            "release download") d=$(sed -n 's/.* -D \([^ ]*\).*/\1/p' <<<"$*"); mkdir -p "$d"
+              cp "$GITHUB_WORKSPACE"/release/update.json* "$d"/ ;;
+            "release upload") shift 3; for f in "$@"; do [ -f "$f" ] && cp "$f" "$GITHUB_WORKSPACE/release/"; done; true ;;
+          esac
+          GH
+          chmod +x fakebin/gh
+          echo "$PWD/fakebin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/control
+        with:
+          action: pause
+          signing-key: ${{ steps.keys.outputs.private }}
+          public-key: ${{ steps.keys.outputs.public }}
+      - uses: ./.github/actions/control
+        with:
+          action: rollout
+          value: "30"
+          signing-key: ${{ steps.keys.outputs.private }}
+          public-key: ${{ steps.keys.outputs.public }}
+      - name: Another key is refused and changes nothing
+        # On the command the action runs: a step failing on purpose shows as an error.
+        env:
+          BEACON_SIGNING_KEY: ${{ steps.keys.outputs.other }}
+          PUBLIC: ${{ steps.keys.outputs.public }}
+        run: |
+          cp release/update.json before.json
+          if PYTHONPATH=python python3 -m beacon.release control release --resume --public-key "$PUBLIC" 2>err.txt; then
+            echo "::error::signed with a key that is not the app's"; exit 1
+          fi
+          grep -q "does not belong" err.txt
+          cmp before.json release/update.json
+      - name: Paused, at 30 percent, signed by the app's key
+        env:
+          PUBLIC: ${{ steps.keys.outputs.public }}
+        run: |
+          cat gh-calls.log
+          PYTHONPATH=python python3 - <<'PY'
+          import base64, json, os
+          from beacon import _ed25519
+          data = open("release/update.json", "rb").read()
+          sig = base64.b64decode(open("release/update.json.sig", "rb").read())
+          assert _ed25519.verify(base64.b64decode(os.environ["PUBLIC"]), data, sig), "signature"
+          body = json.loads(data)
+          assert body["paused"] is True and body["rollout"] == 30, body
+          PY
+          grep -q "release view" gh-calls.log  # no tag given: the latest release
+
+  changes:
+    # The demo releases are three long builds (macOS minutes count ten times on a
+    # private repo): only when what they test changed, or when not a plain push.
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.diff.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$EVENT" != push ] && [ "$EVENT" != pull_request ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            release=true  # a new branch, a tag, a manual or a called run: everything
+          elif git diff --name-only "$BEFORE" HEAD | grep -qE '^(\.github/|examples/|python/beacon/(build|release)\.py$|python/pyproject\.toml$|swift/Package\.swift$)'; then
+            release=true
+          else
+            release=false
+          fi
+          echo "release=$release" | tee -a "$GITHUB_OUTPUT"
+
+  app-release-python:
+    # The reusable app release on the Python demo, macOS and Windows; nothing published.
+    needs: [python, swift, worker, changes]
+    if: needs.changes.outputs.release == 'true'
+    uses: ./.github/workflows/app-release.yml
+    with:
+      path: examples/demo-python
+      platforms: '["macos", "windows"]'
+      pre-build: >-
+        python -m pip install PySide6 &&
+        printf '{"version": "%s", "public_key": "", "base_url": "http://127.0.0.1:9/", "endpoint": "http://127.0.0.1:9/", "auto_update": false, "cask": null}' "$VERSION" > demo_config.json
+      publish: false
+
+  app-release-swift:
+    # The same on the Swift demo: one universal .app.
+    needs: [python, swift, worker, changes]
+    if: needs.changes.outputs.release == 'true'
+    uses: ./.github/workflows/app-release.yml
+    with:
+      path: examples/demo-swift
+      pre-build: >-
+        printf '{"version": "%s", "public_key": "", "base_url": "http://127.0.0.1:9/", "endpoint": "http://127.0.0.1:9/", "auto_update": false, "cask": null}' "$VERSION" > demo_config.json
+      publish: false
+
+  windows-e2e:
+    # The Python demo built with beacon.build (Nuitka onefile) updating itself
+    # on Windows. See examples/run-local.ps1.
+    needs: [python, swift, worker]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e "python[build]" PySide6
+      - name: Self-update end to end
+        run: ./examples/run-local.ps1 -Work "$env:RUNNER_TEMP\e2e"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-e2e-logs
+          path: |
+            ${{ runner.temp }}/e2e/*.log
+            ${{ runner.temp }}/e2e/build/*/build.log
+
+  # ---- 3. deploy -------------------------------------------------------------
+
+  deploy-worker:
+    # What runs at beacon-api.ugurcan-dede.workers.dev is always what main says,
+    # and only once everything above passed.
+    needs: [release-manifest, release-version, release-cask, release-codesign, release-control,
+            app-release-python, app-release-swift, windows-e2e]
+    # Skipped demo releases count as passed; a failed or cancelled job stops it.
+    if: ${{ !failure() && !cancelled() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: worker-deploy
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci
+      - env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
