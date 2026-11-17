@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beacon"
+license = "LicenseRef-Proprietary"
+license-files = ["../LICENSE"]
+dynamic = ["version"]
+requires-python = ">=3.10"
+dependencies = ["certifi"]
+
+[project.optional-dependencies]
+# beacon.build for Python apps; keep the pin in step with beacon.build.NUITKA.
+build = ["nuitka==4.2.2", "ordered-set", "zstandard"]
+
+[tool.setuptools]
+packages = ["beacon"]
+
+[tool.setuptools.dynamic]
+# One place for the version: frozen apps have no package metadata to read it from.
+version = { attr = "beacon.__version__" }
