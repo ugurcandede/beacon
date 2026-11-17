@@ -1,0 +1,29 @@
+name: beacon release annotation
+description: >
+  Marks a release on the PostHog charts ("<app> <version>"), so a change in
+  errors or users lines up with the version. Run it after the release is out.
+
+inputs:
+  app:
+    description: The app's name as the reports know it; default name in beacon.toml lower-cased.
+    default: ""
+  version:
+    description: The released version, without the v.
+    required: true
+  key:
+    description: A PostHog personal API key with only the annotation:write scope; pass a secret.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}/../../../python
+        APP: ${{ inputs.app }}
+        VERSION: ${{ inputs.version }}
+        POSTHOG_ANNOTATION_KEY: ${{ inputs.key }}
+      run: |
+        PY=python3; [ "$RUNNER_OS" = Windows ] && PY=python
+        APP=${APP:-$($PY -m beacon.release config name | tr '[:upper:]' '[:lower:]')}
+        $PY -m beacon.release annotate --app "$APP" --version "$VERSION"

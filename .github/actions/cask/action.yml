@@ -1,0 +1,47 @@
+name: beacon Homebrew cask
+description: >
+  Points a cask in the tap at a new release: sets its version and the sha256 of
+  the asset, then commits and pushes to the tap.
+
+inputs:
+  cask:
+    description: "The cask's name, e.g. lumea (Casks/lumea.rb); default: cask in beacon.toml."
+    default: ""
+  version:
+    description: The released version, without the v.
+    required: true
+  asset:
+    description: The macOS zip the cask downloads; its sha256 goes into the cask.
+    required: true
+  token:
+    description: A token that can push to the tap; pass a secret.
+    required: true
+  tap:
+    description: The tap repository.
+    default: ugurcandede/homebrew-tap
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}/../../../python
+        CASK: ${{ inputs.cask }}
+        VERSION: ${{ inputs.version }}
+        ASSET: ${{ inputs.asset }}
+        TOKEN: ${{ inputs.token }}
+        TAP: ${{ inputs.tap }}
+      run: |
+        PY=python3; [ "$RUNNER_OS" = Windows ] && PY=python
+        CASK=${CASK:-$($PY -m beacon.release config cask)}
+        if [ -z "$CASK" ]; then echo "::error::no cask input and no cask in beacon.toml"; exit 1; fi
+        SHA=$($PY -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$ASSET")
+        DIR="$RUNNER_TEMP/beacon-tap"
+        rm -rf "$DIR"
+        git clone -q "https://x-access-token:${TOKEN}@github.com/${TAP}.git" "$DIR"
+        $PY -m beacon.release cask "$DIR/Casks/$CASK.rb" --version "$VERSION" --sha256 "$SHA"
+        cd "$DIR"
+        if git diff --quiet; then echo "$CASK is already at $VERSION"; exit 0; fi
+        git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" \
+          commit -qam "Update $CASK cask to v$VERSION"
+        git push -q

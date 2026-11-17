@@ -1,0 +1,41 @@
+name: beacon codesign identity
+description: >
+  Loads the owner's self-signed code signing certificate (beacon.release
+  codesign-cert) into a keychain made for this job and sets
+  BEACON_CODESIGN_IDENTITY, which beacon.build then signs with. Every build
+  signed by the same certificate is the same app to macOS, so permissions such
+  as Accessibility survive updates. macOS runners only.
+
+inputs:
+  p12:
+    description: The certificate and key, base64 (the BEACON_CODESIGN_P12 secret).
+    required: true
+  password:
+    description: Its password (the BEACON_CODESIGN_PASSWORD secret).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        P12: ${{ inputs.p12 }}
+        PASSWORD: ${{ inputs.password }}
+      run: |
+        KEYCHAIN="$RUNNER_TEMP/beacon-codesign.keychain-db"
+        KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+        echo "$P12" | base64 --decode > "$RUNNER_TEMP/codesign.p12"
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+        security import "$RUNNER_TEMP/codesign.p12" -k "$KEYCHAIN" -P "$PASSWORD" -T /usr/bin/codesign
+        rm "$RUNNER_TEMP/codesign.p12"
+        # Let codesign use the key without a prompt.
+        security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+        security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+        # Self-signed, so not "valid" (-v would hide it); its SHA-1 names it for codesign.
+        # The listing starts with a blank line and a header; the identity is on the "1)" line.
+        IDENTITY=$(security find-identity -p codesigning "$KEYCHAIN" | awk '/^ *1\)/ {print $2; exit}')
+        if [ -z "$IDENTITY" ]; then echo "::error::no code signing identity in the certificate"; exit 1; fi
+        echo "BEACON_CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+        echo "signing with $IDENTITY"

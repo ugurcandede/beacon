@@ -1,0 +1,79 @@
+name: beacon release manifest
+description: >
+  Writes update.json and update.json.sig (Ed25519) for a release, the files
+  beacon's update clients check. Upload both with the release assets.
+
+inputs:
+  tag:
+    description: The release tag, e.g. v1.4.0 (the version is the tag without the v).
+    required: true
+  assets:
+    description: One PLATFORM=PATH per line, e.g. windows-x64=release/App.exe, macos-arm64=release/App.zip.
+    required: true
+  signing-key:
+    description: The private key from `python -m beacon.release keygen`; pass a secret.
+    required: true
+  public-key:
+    description: >
+      The public key built into the app; default: public_key in beacon.toml. The action fails if
+      signing-key does not match it, or if there is no key to check against.
+    default: ""
+  out:
+    description: Directory to write update.json and update.json.sig into.
+    default: release
+  rollout:
+    description: Optional, 0-100. Offer the release to this percent of machines first; widen it later with beacon.release control.
+    default: ""
+  min-version:
+    description: Optional. Older versions must take this update (no skipping); for a security fix.
+    default: ""
+  channel:
+    description: "stable (update.json) or beta (update-beta.json: upload it to the latest stable release too)."
+    default: stable
+  repo:
+    description: The repository the release assets are downloaded from.
+    default: ${{ github.repository }}
+
+outputs:
+  manifest:
+    description: Path of update.json.
+    value: ${{ steps.manifest.outputs.manifest }}
+  signature:
+    description: Path of update.json.sig.
+    value: ${{ steps.manifest.outputs.signature }}
+
+runs:
+  using: composite
+  steps:
+    - id: manifest
+      shell: bash
+      env:
+        BEACON_SIGNING_KEY: ${{ inputs.signing-key }}
+        # beacon.release needs only the standard library, so it runs from this
+        # checkout of the action: nothing to install.
+        PYTHONPATH: ${{ github.action_path }}/../../../python
+        # Inputs go through the environment, never into the script text, so a
+        # tag or path cannot inject shell.
+        ASSETS: ${{ inputs.assets }}
+        REPO: ${{ inputs.repo }}
+        TAG: ${{ inputs.tag }}
+        OUT: ${{ inputs.out }}
+        PUBLIC_KEY: ${{ inputs.public-key }}
+        ROLLOUT: ${{ inputs.rollout }}
+        MIN_VERSION: ${{ inputs.min-version }}
+        CHANNEL: ${{ inputs.channel }}
+      run: |
+        # No mapfile: macOS runners may still have bash 3.2.
+        assets=()
+        while IFS= read -r line; do
+          [ -n "${line//[[:space:]]/}" ] && assets+=("$line")
+        done <<< "$ASSETS"
+        PY=python3; [ "$RUNNER_OS" = Windows ] && PY=python  # Windows runners have python, not always python3
+        PUBLIC_KEY=${PUBLIC_KEY:-$($PY -m beacon.release config public_key)}
+        if [ -z "$PUBLIC_KEY" ]; then echo "::error::no public-key input and no public_key in beacon.toml"; exit 1; fi
+        rollout=(--channel "$CHANNEL"); [ -n "$ROLLOUT" ] && rollout+=(--rollout "$ROLLOUT")
+        [ -n "$MIN_VERSION" ] && rollout+=(--min-version "$MIN_VERSION")
+        $PY -m beacon.release manifest --repo "$REPO" --tag "$TAG" --out "$OUT" --public-key "$PUBLIC_KEY" ${rollout[@]+"${rollout[@]}"} "${assets[@]}"
+        name=update.json; [ "$CHANNEL" = beta ] && name=update-beta.json
+        echo "manifest=$OUT/$name" >> "$GITHUB_OUTPUT"
+        echo "signature=$OUT/$name.sig" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,70 @@
+name: beacon release control
+description: >
+  Changes a published release without a new build: pauses or resumes it, sets its
+  rollout percent, or makes it required for older versions (min-version). Downloads
+  update.json from the GitHub release, changes and signs it again, uploads it back.
+  Installed copies see it at their next check. For an app's "Release control"
+  workflow (workflow_dispatch; docs/operations.md).
+
+inputs:
+  action:
+    description: "pause, resume, rollout or min-version."
+    required: true
+  value:
+    description: The percent (0-100) for rollout, the version for min-version.
+    default: ""
+  channel:
+    description: "stable (update.json) or beta (update-beta.json)."
+    default: stable
+  tag:
+    description: The release holding the manifest; default the latest (where installed copies look).
+    default: ""
+  signing-key:
+    description: The private key (BEACON_SIGNING_KEY); pass a secret.
+    required: true
+  public-key:
+    description: The app's public key; default public_key in beacon.toml. A key that does not match fails.
+    default: ""
+  repo:
+    default: ${{ github.repository }}
+  token:
+    description: Can read and upload release assets (contents write).
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}/../../../python
+        BEACON_SIGNING_KEY: ${{ inputs.signing-key }}
+        GH_TOKEN: ${{ inputs.token }}
+        ACTION: ${{ inputs.action }}
+        VALUE: ${{ inputs.value }}
+        CHANNEL: ${{ inputs.channel }}
+        TAG: ${{ inputs.tag }}
+        PUBLIC_KEY: ${{ inputs.public-key }}
+        REPO: ${{ inputs.repo }}
+      run: |
+        PY=python3; [ "$RUNNER_OS" = Windows ] && PY=python
+        PUBLIC_KEY=${PUBLIC_KEY:-$($PY -m beacon.release config public_key)}
+        if [ -z "$PUBLIC_KEY" ]; then echo "::error::no public-key input and no public_key in beacon.toml"; exit 1; fi
+        case "$ACTION" in
+          pause) change=(--pause) ;;
+          resume) change=(--resume) ;;
+          rollout) change=(--rollout "$VALUE") ;;
+          min-version) change=(--min-version "$VALUE") ;;
+          *) echo "::error::action is pause, resume, rollout or min-version, not '$ACTION'"; exit 1 ;;
+        esac
+        if [ "$ACTION" = rollout ] || [ "$ACTION" = min-version ]; then
+          [ -n "$VALUE" ] || { echo "::error::$ACTION needs a value"; exit 1; }
+        fi
+        TAG=${TAG:-$(gh release view -R "$REPO" --json tagName --jq .tagName)}
+        name=update.json; [ "$CHANNEL" = beta ] && name=update-beta.json
+        dir="$RUNNER_TEMP/beacon-control"
+        rm -rf "$dir"
+        gh release download "$TAG" -R "$REPO" -p "$name" -p "$name.sig" -D "$dir"
+        $PY -m beacon.release control "$dir" "${change[@]}" --channel "$CHANNEL" --public-key "$PUBLIC_KEY"
+        gh release upload "$TAG" -R "$REPO" "$dir/$name" "$dir/$name.sig" --clobber
+        now=$($PY -c 'import json, sys; d = json.load(open(sys.argv[1])); print(d["version"], {k: d[k] for k in ("paused", "rollout", "min_version") if k in d})' "$dir/$name")
+        echo "$name on $TAG: $now" | tee -a "$GITHUB_STEP_SUMMARY"

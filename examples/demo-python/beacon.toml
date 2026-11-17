@@ -1,0 +1,9 @@
+# Read by python -m beacon.build (and examples/run-local.sh, run-local.ps1).
+name = "BeaconDemoPy"
+id = "com.ugurcandede.beacon-demo-py"
+company = "ugurcandede"
+data = ["demo_config.json"]   # written by the run-local scripts before each build
+
+[python]
+entry = "demo.py"
+plugins = ["pyside6"]

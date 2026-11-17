@@ -1,0 +1,10 @@
+# Read by python -m beacon.build (and examples/run-local.sh).
+name = "BeaconDemoSwift"
+id = "com.ugurcandede.beacon-demo-swift"
+data = ["demo_config.json"]   # written by run-local.sh before each build
+
+[swift]
+product = "BeaconDemo"
+
+[macos.plist]
+NSAppTransportSecurity = { NSAllowsLocalNetworking = true }   # the local update server

@@ -1,0 +1,247 @@
+# An app's whole release, called from the app's own workflow (docs/getting-started.md):
+# the next version from the commits, a build per platform from beacon.toml (signed on
+# macOS), a GitHub release with the builds and the signed update.json, the Homebrew
+# cask, and the release marked on the PostHog charts.
+#
+#   jobs:
+#     release:
+#       uses: ugurcandede/beacon/.github/workflows/app-release.yml@v1
+#       permissions: { contents: write }
+#       with: { platforms: '["macos", "windows"]' }
+#       secrets:
+#         signing-key: ${{ secrets.BEACON_SIGNING_KEY }}
+#         codesign-p12: ${{ secrets.BEACON_CODESIGN_P12 }}
+#         codesign-password: ${{ secrets.BEACON_CODESIGN_PASSWORD }}
+#         tap-token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+#         annotation-key: ${{ secrets.POSTHOG_ANNOTATION_KEY }}
+#
+# The release is made as a draft and published once update.json is on it, so
+# releases/latest never points at a release without one.
+name: beacon app release
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: The app's folder (where beacon.toml is), relative to the repository.
+        type: string
+        default: "."
+      platforms:
+        description: 'JSON list: "macos", "windows".'
+        type: string
+        default: '["macos"]'
+      python-version:
+        type: string
+        default: "3.12"
+      requirements:
+        description: A pip requirements file in the app's folder, installed before the build if it exists.
+        type: string
+        default: requirements.txt
+      pre-build:
+        description: A shell command run in the app's folder before each build (the version is in $VERSION).
+        type: string
+        default: ""
+      rollout:
+        description: Optional, 0-100. Offer it to this percent of machines first; widen it with the control action.
+        type: string
+        default: ""
+      min-version:
+        description: Optional. Older versions must take this update.
+        type: string
+        default: ""
+      channel:
+        description: "stable, or beta: a prerelease, with update-beta.json also on the latest stable release."
+        type: string
+        default: stable
+      publish:
+        description: false builds and signs the manifest but releases nothing (beacon's own CI).
+        type: boolean
+        default: true
+    secrets:
+      signing-key:
+        description: BEACON_SIGNING_KEY. Without publish, a throwaway key is made when it is missing.
+        required: false
+      codesign-p12:
+        required: false
+      codesign-password:
+        required: false
+      tap-token:
+        description: Pushes the cask to the tap; without it the cask is left alone.
+        required: false
+      annotation-key:
+        description: POSTHOG_ANNOTATION_KEY; without it no annotation.
+        required: false
+    outputs:
+      tag:
+        value: ${{ jobs.version.outputs.tag }}
+      version:
+        value: ${{ jobs.version.outputs.version }}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.next.outputs.tag }}
+      version: ${{ steps.next.outputs.version }}
+      # Artifacts are per run, and a caller may release two apps in one run.
+      artifacts: ${{ steps.name.outputs.prefix }}
+    steps:
+      - id: name
+        run: echo "prefix=build-$(uuidgen | cut -c1-8)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # This workflow's own beacon, for its actions and its Python package.
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .beacon
+      - id: next
+        uses: ./.beacon/.github/actions/version
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        platform: ${{ fromJSON(inputs.platforms) }}
+    runs-on: ${{ matrix.platform == 'windows' && 'windows-latest' || 'macos-latest' }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      HAS_CODESIGN: ${{ secrets.codesign-p12 != '' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.path }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .beacon
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install
+        env:
+          REQUIREMENTS: ${{ inputs.requirements }}
+        run: |
+          python -m pip install "$GITHUB_WORKSPACE/.beacon/python[build]"
+          if [ -f "$REQUIREMENTS" ]; then python -m pip install -r "$REQUIREMENTS"; fi
+      - if: matrix.platform == 'macos' && env.HAS_CODESIGN == 'true'
+        uses: ./.beacon/.github/actions/codesign
+        with:
+          p12: ${{ secrets.codesign-p12 }}
+          password: ${{ secrets.codesign-password }}
+      - name: Pre-build
+        if: inputs.pre-build != ''
+        env:
+          PRE_BUILD: ${{ inputs.pre-build }}
+        run: bash -c "$PRE_BUILD"
+      - name: Build
+        run: python -m beacon.build --version "$VERSION" --out "$GITHUB_WORKSPACE/dist"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ needs.version.outputs.artifacts }}-${{ matrix.platform }}
+          path: dist
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      VERSION: ${{ needs.version.outputs.version }}
+      CONFIG: ${{ inputs.path }}/beacon.toml
+      PYTHONPATH: ${{ github.workspace }}/.beacon/python
+      GH_TOKEN: ${{ github.token }}
+      SIGNING_KEY: ${{ secrets.signing-key }}
+      HAS_TAP_TOKEN: ${{ secrets.tap-token != '' }}
+      HAS_ANNOTATION_KEY: ${{ secrets.annotation-key != '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .beacon
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: ${{ needs.version.outputs.artifacts }}-*
+          path: built
+      - name: Assets and keys
+        id: assets
+        env:
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          # Each build wrote PLATFORM=PATH lines with its runner's paths; the files are under built/ here.
+          mkdir -p dist
+          {
+            echo "lines<<EOF"
+            # One artifact downloads into built/ itself, several into built/<name>/.
+            find built -name assets.txt -exec cat {} + | tr -d '\r' | while IFS='=' read -r platform path; do  # Windows wrote CRLF
+              [ -n "$platform" ] || continue
+              name=$(basename "${path//\\//}")
+              file=$(find built -name "$name" -print -quit)
+              if [ -z "$file" ]; then echo "::error::$name is in assets.txt but not in the builds" >&2; exit 1; fi
+              [ -f "dist/$name" ] || cp "$file" dist/  # a universal build: one file, two platforms
+              echo "$platform=dist/$name"
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          public=$(python3 -m beacon.release config public_key --config "$CONFIG")
+          if [ -z "$SIGNING_KEY" ]; then
+            if [ "$PUBLISH" = true ]; then echo "::error::no signing-key secret"; exit 1; fi
+            keys=$(python3 -m beacon.release keygen)  # beacon's own CI: a throwaway key
+            echo "::add-mask::$(awk '/^private/ {print $NF}' <<<"$keys")"
+            echo "SIGNING_KEY=$(awk '/^private/ {print $NF}' <<<"$keys")" >> "$GITHUB_ENV"
+            public=$(awk '/^public/ {print $NF}' <<<"$keys")
+          fi
+          echo "public=$public" >> "$GITHUB_OUTPUT"
+          echo "cask=$(python3 -m beacon.release config cask --config "$CONFIG")" >> "$GITHUB_OUTPUT"
+          echo "app=$(python3 -m beacon.release config name --config "$CONFIG" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          ls -l dist
+      - id: manifest
+        uses: ./.beacon/.github/actions/release
+        with:
+          tag: ${{ env.TAG }}
+          assets: ${{ steps.assets.outputs.lines }}
+          signing-key: ${{ env.SIGNING_KEY }}
+          public-key: ${{ steps.assets.outputs.public }}
+          rollout: ${{ inputs.rollout }}
+          min-version: ${{ inputs.min-version }}
+          channel: ${{ inputs.channel }}
+          out: manifest
+      - name: Release
+        if: inputs.publish
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          prerelease=(); [ "$CHANNEL" = beta ] && prerelease=(--prerelease)
+          gh release create "$TAG" dist/* "${{ steps.manifest.outputs.manifest }}" "${{ steps.manifest.outputs.signature }}" \
+            --draft --generate-notes --target "$GITHUB_SHA" ${prerelease[@]+"${prerelease[@]}"}
+          gh release edit "$TAG" --draft=false
+          if [ "$CHANNEL" = beta ]; then
+            # releases/latest never points at a prerelease: the beta manifest rides on the latest stable one.
+            stable=$(gh release view --json tagName --jq .tagName)
+            gh release upload "$stable" "${{ steps.manifest.outputs.manifest }}" "${{ steps.manifest.outputs.signature }}" --clobber
+          fi
+      - name: Mac asset
+        id: mac
+        if: inputs.publish && inputs.channel == 'stable' && steps.assets.outputs.cask != '' && env.HAS_TAP_TOKEN == 'true'
+        run: echo "zip=$(ls dist/*macos*.zip | head -1)" >> "$GITHUB_OUTPUT"
+      - if: steps.mac.outputs.zip != ''
+        uses: ./.beacon/.github/actions/cask
+        with:
+          cask: ${{ steps.assets.outputs.cask }}
+          version: ${{ env.VERSION }}
+          asset: ${{ steps.mac.outputs.zip }}
+          token: ${{ secrets.tap-token }}
+      - if: inputs.publish && env.HAS_ANNOTATION_KEY == 'true'
+        uses: ./.beacon/.github/actions/annotate
+        with:
+          app: ${{ steps.assets.outputs.app }}
+          version: ${{ env.VERSION }}
+          key: ${{ secrets.annotation-key }}
