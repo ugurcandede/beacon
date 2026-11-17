@@ -112,14 +112,9 @@
           "$lib_version": "0.2.0",
           "$geoip_disable": true,
           "$geoip_country_code": "TR",
-          "$geoip_continent_code": "AS",
           "$geoip_subdivision_1_code": "16",
           "$geoip_subdivision_1_name": "Bursa",
           "$geoip_city_name": "Bursa",
-          "$geoip_postal_code": "16000",
-          "$geoip_latitude": 40.18,
-          "$geoip_longitude": 29.06,
-          "$geoip_time_zone": "Europe/Istanbul",
           "$set": {
             "app_version": "1.4.0",
             "os": "macOS",
@@ -166,14 +161,9 @@
           "$lib_version": "0.2.0",
           "$geoip_disable": true,
           "$geoip_country_code": "TR",
-          "$geoip_continent_code": "AS",
           "$geoip_subdivision_1_code": "16",
           "$geoip_subdivision_1_name": "Bursa",
           "$geoip_city_name": "Bursa",
-          "$geoip_postal_code": "16000",
-          "$geoip_latitude": 40.18,
-          "$geoip_longitude": 29.06,
-          "$geoip_time_zone": "Europe/Istanbul",
           "$set": {
             "app_version": "1.4.0",
             "os": "macOS",
@@ -250,6 +240,80 @@
       "why": "sent_at not a number",
       "patch": {
         "sent_at": "now"
+      }
+    },
+    {
+      "why": "an event that is not an object",
+      "patch": {
+        "events": [
+          null
+        ]
+      }
+    },
+    {
+      "why": "a context that is null",
+      "patch": {
+        "context": null
+      }
+    },
+    {
+      "why": "a context that is a list",
+      "patch": {
+        "context": []
+      }
+    },
+    {
+      "why": "an event time no date can hold",
+      "patch": {
+        "events": [
+          {
+            "name": "x",
+            "props": {},
+            "ts": 1e+300,
+            "session_id": "s"
+          }
+        ]
+      }
+    },
+    {
+      "why": "a sent_at no date can hold",
+      "patch": {
+        "sent_at": 1e+300
+      }
+    },
+    {
+      "why": "an event with an empty name",
+      "patch": {
+        "events": [
+          {
+            "name": "",
+            "props": {},
+            "ts": 1761600000000,
+            "session_id": "s"
+          }
+        ]
+      }
+    },
+    {
+      "why": "props that are not an object",
+      "patch": {
+        "events": [
+          {
+            "name": "x",
+            "props": [
+              1
+            ],
+            "ts": 1761600000000,
+            "session_id": "s"
+          }
+        ]
+      }
+    },
+    {
+      "why": "nobody to count it under (no machine id, empty install id)",
+      "patch": {
+        "machine_id": "",
+        "install_id": ""
       }
     }
   ],

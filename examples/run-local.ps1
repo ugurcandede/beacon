@@ -20,8 +20,17 @@ $Log = Join-Path $DataDir "update.log"
 # Nuitka does not see through an editable (pip install -e) install.
 $env:PYTHONPATH = Join-Path $Root "python"
 
-Remove-Item -Recurse -Force $Work, $DataDir -ErrorAction SilentlyContinue
+# The work folder is wiped: only one this script made (or an empty one) qualifies.
+$Work = [System.IO.Path]::GetFullPath($Work)
+$DataDir = Join-Path $Work "data"
+$Log = Join-Path $DataDir "update.log"
+$Mark = Join-Path $Work ".beacon-run-local"
+if ((Test-Path $Work) -and -not (Test-Path $Mark) -and (Get-ChildItem -Force $Work | Select-Object -First 1)) {
+    throw "refusing to delete ${Work}: it has files and was not made by this script (no .beacon-run-local in it)"
+}
+Remove-Item -Recurse -Force $Work -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$Work\build", "$Work\serve\py", "$Work\app" | Out-Null
+New-Item -ItemType File -Force $Mark | Out-Null
 
 $keys = & $Python -m beacon.release keygen
 $env:BEACON_SIGNING_KEY = ($keys | Where-Object { $_ -like "private*" }).Split(" ")[-1]
@@ -71,7 +80,8 @@ if (Test-Path $Log) { Get-Content $Log; Copy-Item $Log "$Work\update.log" } else
 Write-Host "--- $Work\app"
 Get-ChildItem "$Work\app" | Format-Table Name, Length, LastWriteTime
 
-Get-Process BeaconDemoPy -ErrorAction SilentlyContinue | Stop-Process -Force
+# Only the copies this run started, not a demo someone else has open.
+Get-Process BeaconDemoPy -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Work*" } | Stop-Process -Force
 Stop-Process $server -Force -ErrorAction SilentlyContinue
 
 if ($passed -and $running) { Write-Host "PASS: 1.1.0 installed over 1.0.0 and running" }

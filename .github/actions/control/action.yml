@@ -7,6 +7,9 @@ description: >
   workflow (workflow_dispatch; docs/operations.md).
 
 inputs:
+  config:
+    description: The app's beacon.toml, when it is not at the repository root.
+    default: beacon.toml
   action:
     description: "pause, resume, rollout or min-version."
     required: true
@@ -37,6 +40,7 @@ runs:
     - shell: bash
       env:
         PYTHONPATH: ${{ github.action_path }}/../../../python
+        CONFIG: ${{ inputs.config }}
         BEACON_SIGNING_KEY: ${{ inputs.signing-key }}
         GH_TOKEN: ${{ inputs.token }}
         ACTION: ${{ inputs.action }}
@@ -47,7 +51,7 @@ runs:
         REPO: ${{ inputs.repo }}
       run: |
         PY=python3; [ "$RUNNER_OS" = Windows ] && PY=python
-        PUBLIC_KEY=${PUBLIC_KEY:-$($PY -m beacon.release config public_key)}
+        PUBLIC_KEY=${PUBLIC_KEY:-$($PY -m beacon.release config public_key --config "$CONFIG")}
         if [ -z "$PUBLIC_KEY" ]; then echo "::error::no public-key input and no public_key in beacon.toml"; exit 1; fi
         case "$ACTION" in
           pause) change=(--pause) ;;

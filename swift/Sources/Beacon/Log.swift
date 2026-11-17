@@ -42,7 +42,8 @@ public enum Log {
             guard let analytics = Log.queue.sync(execute: { Log.analytics }) else { return }
             analytics.track("$exception", Log.exceptionProps(type: exception.name.rawValue, value: exception.reason ?? "",
                                                              frames: exception.callStackSymbols, handled: false))
-            analytics.flushBeforeQuit()
+            // Sent, but the run is not marked as ended: the next launch reports it as unclean.
+            analytics.flush()
         }
     }
 
@@ -133,7 +134,7 @@ public enum Log {
         guard let text = try? String(contentsOf: url, encoding: .utf8), let newline = text.firstIndex(of: "\n"),
               let report = try? JSONSerialization.jsonObject(with: Data(text[text.index(after: newline)...].utf8)) as? [String: Any],
               let threads = report["threads"] as? [[String: Any]], let faulting = report["faultingThread"] as? Int,
-              faulting < threads.count, let rawFrames = threads[faulting]["frames"] as? [[String: Any]] else { return nil }
+              faulting >= 0, faulting < threads.count, let rawFrames = threads[faulting]["frames"] as? [[String: Any]] else { return nil }
         let images = (report["usedImages"] as? [[String: Any]] ?? []).map { $0["name"] as? String ?? "" }
         let process = report["procName"] as? String
         let frames: [[String: Any]] = rawFrames.prefix(maxFrames).map { frame in
@@ -171,13 +172,25 @@ public enum Log {
             guard let url = fileURL else { return }
             let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
             if size > maxBytes { rotate(url) }
-            if let handle = try? FileHandle(forWritingTo: url) {
-                handle.seekToEndOfFile()
-                handle.write(Data(line.utf8))
-                try? handle.close()
-            } else {
-                try? Data(line.utf8).write(to: url)
-            }
+            append(Data(line.utf8), to: url)
+        }
+    }
+
+    /// Adds `data` to the end of the file, making it if needed; false when it
+    /// cannot (a full disk, no permission). The older FileHandle calls raise an
+    /// Objective-C exception there, which would end the app over a log line.
+    @discardableResult
+    static func append(_ data: Data, to url: URL) -> Bool {
+        guard let handle = try? FileHandle(forWritingTo: url) else {
+            return (try? data.write(to: url)) != nil
+        }
+        defer { try? handle.close() }
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            return true
+        } catch {
+            return false
         }
     }
 

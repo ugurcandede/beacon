@@ -21,6 +21,8 @@ thread the QtUpdater lives on (the UI thread), so slots can touch widgets and
 the app needs no threads of its own.
 """
 
+import getpass
+import logging
 import threading
 
 from PySide6.QtCore import QObject, Signal
@@ -57,6 +59,8 @@ class QtUpdater(QObject):
                 work()
             except UpdateError as e:
                 self.failed.emit(str(e))
+            except Exception as e:  # the UI is waiting for an answer: it gets one
+                self.failed.emit(f"unexpected: {e!r}")
 
         threading.Thread(target=guarded, daemon=True, name="beacon-update").start()
 
@@ -84,17 +88,24 @@ def ask_consent(analytics, app_name, privacy_url, parent=None):
     box.setWindowTitle(app_name)
     box.setText(f"Help improve {app_name}?")
     box.setInformativeText(
-        "Send anonymous usage statistics and error reports: how the app is used, which version, "
-        f"the OS and the country -- never your files, typed text or names. "
-        f'<a href="{privacy_url}">What is collected</a>. You can change this in the settings at any time.')
+        f'{CONSENT_TEXT} <a href="{privacy_url}">What is collected</a>. You can change this in the settings at any time.')
     box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-    box.setDefaultButton(QMessageBox.StandardButton.Yes)
+    box.setDefaultButton(QMessageBox.StandardButton.No)  # a stray Enter at startup is not a yes
     granted = box.exec() == QMessageBox.StandardButton.Yes
     analytics.set_consent(granted)
     return granted
 
 
+CONSENT_TEXT = ("Send anonymous usage statistics and error reports: how the app is used and which version, "
+                "an id for this machine, its model, OS and screen size, your country, region and city, "
+                "and the text of errors. Never your files, what you type, or your name.")
+
 _server = None
+
+
+def _server_name(name):
+    # Per user: the pipe is machine-wide on Windows, and two users may run the app.
+    return f"beacon-{name}-{getpass.getuser()}"
 
 
 def single_instance(name, on_activate=None):
@@ -102,7 +113,7 @@ def single_instance(name, on_activate=None):
     `on_activate` here (show and raise the window). False if another copy runs;
     it has been asked to show itself, and this one should exit."""
     global _server
-    server_name = f"beacon-{name}"
+    server_name = _server_name(name)
     if not system.single_instance(name):
         socket = QLocalSocket()
         socket.connectToServer(server_name)
@@ -120,5 +131,7 @@ def single_instance(name, on_activate=None):
                 on_activate()
 
         _server.newConnection.connect(accept)
-    _server.listen(server_name)
+    if not _server.listen(server_name):
+        # Still the only copy; a second launch just cannot ask it to show itself.
+        logging.getLogger("beacon").warning("single instance: cannot listen on %s: %s", server_name, _server.errorString())
     return True

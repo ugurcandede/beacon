@@ -42,8 +42,9 @@ Python and Swift side by side; the two keep the same names on purpose. Wire form
 - `manual=True`: the user asked, so a skipped version is offered again.
 - `Release`: `version`, `url`, `size`, `sha256`, `notes_url`, `required` (below the manifest's
   `min_version`; cannot be skipped).
-- `install()` asks the server again first; a release paused or replaced since it was offered fails
-  with step `withdrawn`.
+- `install()` asks the server again first and installs what it offers then; a release paused or
+  replaced since it was offered fails with step `withdrawn`.
+- `check()` and `install()` raise only `UpdateError`, whatever went wrong.
 - `UpdateError.step`: `check`, `withdrawn`, `download`, `verify`, `install`, `brew_behind`.
 - Python: `update.wait_for_previous()` before a single-instance check, on Windows (the new exe
   starts while the old one exits).
@@ -67,11 +68,12 @@ crash reports the system wrote since the last launch. Python native crashes go t
 
 | | Python `beacon.flags.Flags` | Swift `Flags` |
 |---|---|---|
-| Create | `Flags(app, data_dir, *, endpoint=ENDPOINT)` | `Flags(app:dataDirectory:endpoint:)` |
+| Create | `Flags(app, data_dir, *, endpoint=ENDPOINT, analytics=None)` | `Flags(app:dataDirectory:endpoint:analytics:)` |
 | Fetch | `refresh(timeout=5)` | `refresh(timeout:) async` |
 | Read | `enabled(key)`, `value(key, default=None)`, `payload(key, default=None)` | `enabled(_:)`, `value(_:)`, `payload(_:)` |
 
-The last answer is kept and used offline. Qt: `qt.QtFlags(flags)` refreshes off the UI thread and
+With `analytics`, flags are asked for only once the user agreed to statistics and while they are
+on (the request carries the machine id). The last answer is kept and used offline. Qt: `qt.QtFlags(flags)` refreshes off the UI thread and
 emits `refreshed(ok)`.
 
 ## App lifecycle
@@ -92,9 +94,11 @@ Commands:
 |---|---|
 | `python -m beacon.build --version V [--config F] [--out DIR]` | builds for this machine; prints `PLATFORM=PATH` lines |
 | `python -m beacon.release keygen` | a signing key pair |
-| `python -m beacon.release manifest --repo R --tag T --out DIR [--rollout N] [--min-version V] [--channel beta] PLATFORM=PATH...` | the signed `update.json` (needs `BEACON_SIGNING_KEY`) |
-| `python -m beacon.release control DIR [--pause \| --resume] [--rollout N] [--min-version V] [--channel beta]` | changes a published manifest and signs it again |
-| `python -m beacon.release next-version [--since SHA]` | the next version from the commit messages |
+| `python -m beacon.release manifest --repo R --tag T --out DIR [--public-key K] [--rollout N] [--min-version V] [--channel beta] [--base-url U] PLATFORM=PATH...` | the signed `update.json` (needs `BEACON_SIGNING_KEY`) |
+| `python -m beacon.release control DIR [--pause \| --resume] [--rollout N] [--min-version V] [--channel beta] [--public-key K]` | changes a published manifest and signs it again; refuses one whose signature does not match |
+| `python -m beacon.release next-version` | the next version, from the commits since the last release; the same one for a commit already tagged |
+| `python -m beacon.release config KEY [--config F]` | a value from beacon.toml |
+| `python -m beacon.release check-version vX.Y.Z` | beacon's own release: versions and CHANGELOG agree |
 | `python -m beacon.release codesign-cert --name N --out DIR` | the macOS code signing certificate |
 | `python -m beacon.release cask FILE --version V --sha256 H` | points a cask at a release |
 | `python -m beacon.release annotate --app A --version V` | marks a release in PostHog (needs `POSTHOG_ANNOTATION_KEY`) |
@@ -103,14 +107,14 @@ GitHub Actions, `ugurcandede/beacon/.github/actions/<name>@v1`:
 
 | Action | Inputs |
 |---|---|
-| `version` | `since` -> outputs `tag`, `version` |
+| `version` | outputs `tag`, `version` |
 | `codesign` | `p12`, `password` |
-| `release` | `tag`, `assets`, `signing-key`, `public-key`, `rollout`, `min-version`, `channel`, `out` |
-| `control` | `action` (pause, resume, rollout, min-version), `value`, `channel`, `tag`, `signing-key` |
-| `cask` | `cask`, `version`, `asset`, `token` |
-| `annotate` | `app`, `version`, `key` |
+| `release` | `tag`, `assets`, `signing-key`, `public-key`, `rollout`, `min-version`, `channel`, `out`, `repo`, `config` |
+| `control` | `action` (pause, resume, rollout, min-version), `value`, `channel`, `tag`, `signing-key`, `public-key`, `repo`, `token`, `config` |
+| `cask` | `cask`, `version`, `asset`, `token`, `tap`, `config` |
+| `annotate` | `app`, `version`, `key`, `config` |
 
-`public-key` and `cask` default to `beacon.toml`.
+`public-key`, `cask` and `app` default to `beacon.toml` (`config`, when it is not at the repository root).
 
 Reusable workflow `ugurcandede/beacon/.github/workflows/app-release.yml@v1`:
 inputs `path`, `platforms`, `python-version`, `requirements`, `pre-build`, `rollout`, `min-version`,

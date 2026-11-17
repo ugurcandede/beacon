@@ -114,8 +114,11 @@ def wait_for_previous(timeout=15):
     if _AFTER not in sys.argv[:-1]:
         return
     i = sys.argv.index(_AFTER)
-    pid = int(sys.argv[i + 1])
+    value = sys.argv[i + 1]
     del sys.argv[i:i + 2]
+    if not value.isdigit():
+        return  # not from the updater: nothing to wait for
+    pid = int(value)
     deadline = time.monotonic() + timeout
     while _running(pid) and time.monotonic() < deadline:
         time.sleep(0.1)
@@ -187,7 +190,7 @@ class Updater:
         except UpdateError as e:
             self._log(f"check failed: {e}")
             raise
-        except (OSError, ValueError, KeyError) as e:
+        except Exception as e:  # a broken answer or an odd manifest: still a failed check, never a crash
             self._log(f"check failed: {e!r}")
             raise UpdateError("check", _reason(e)) from e
         self._log(f"check: running {self._version} ({self.channel}), offered "
@@ -251,6 +254,7 @@ class Updater:
             offered = self.check(manual=True)
             if offered is None or offered.version != release.version:
                 raise UpdateError("withdrawn", f"{release.version} is no longer offered")
+            release = offered  # what the server signs now, not what the caller has held since
             if kind == "exe":
                 self._install_exe(release, progress)
             elif kind == "bundle":
@@ -263,7 +267,7 @@ class Updater:
             self._log(f"install failed: {e}")
             self._track("update_failed", release, kind, e)
             raise
-        except OSError as e:
+        except Exception as e:  # ditto failing, a broken download: still reported, never a crash
             self._log(f"install failed: {e!r}")
             error = UpdateError("install", _reason(e))
             self._track("update_failed", release, kind, error)
@@ -292,7 +296,9 @@ class Updater:
         here = system._resource_root()
         if here.name != self._version:
             return []  # not the layout beacon.build makes: touch nothing
-        return [p for p in here.parent.iterdir() if p.is_dir() and p != here and _VERSION_DIR.fullmatch(p.name)]
+        # Older ones only: an old exe started by hand must not delete the installed newer version's.
+        return [p for p in here.parent.iterdir() if p.is_dir() and _VERSION_DIR.fullmatch(p.name)
+                and is_newer(self._version, p.name)]
 
     # ---- steps ---------------------------------------------------------------
 
@@ -310,7 +316,14 @@ class Updater:
             raise
         self._log(f"new exe in place, starting {exe}")
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        subprocess.Popen(self._relaunch_command(exe), creationflags=flags, close_fds=True, env=_clean_environment())
+        try:
+            subprocess.Popen(self._relaunch_command(exe), creationflags=flags, close_fds=True, env=_clean_environment())
+        except OSError:
+            # It will not start (blocked, damaged): the build that works goes back.
+            self._log("the new exe did not start, putting the old one back")
+            exe.unlink(missing_ok=True)
+            os.rename(old, exe)
+            raise
 
     def _relaunch_command(self, exe):
         # This process is still running when the new one starts: tell it to wait.
@@ -363,15 +376,18 @@ class Updater:
                     out.write(chunk)
                     digest.update(chunk)
                     done += len(chunk)
+                    if done > release.size:
+                        break  # more than the signed manifest says: not that file, stop taking it
                     if progress:
                         progress(done, release.size)
         except OSError as e:
             Path(dest).unlink(missing_ok=True)
             self._log(f"download failed after {done} bytes: {e!r}")
             raise UpdateError("download", _reason(e)) from e
-        if digest.hexdigest() != release.sha256:
+        if done != release.size or digest.hexdigest() != release.sha256:
             Path(dest).unlink(missing_ok=True)
-            raise UpdateError("verify", f"sha256 mismatch after {done} bytes")
+            what = "sha256 mismatch" if done == release.size else f"size is not the manifest's {release.size}"
+            raise UpdateError("verify", f"{what} after {done} bytes")
         self._log("download verified")
 
     # ---- helpers -------------------------------------------------------------
@@ -396,9 +412,11 @@ class Updater:
     def _relaunch_mac(self, bundle):
         # Reopen by path once this process is gone: another copy with the same
         # bundle id may be registered with LaunchServices.
-        script = f"while kill -0 {os.getpid()} 2>/dev/null; do sleep 0.2; done; open '{bundle}' --args"
-        script += "".join(f" '{arg}'" for arg in self._relaunch_args)
-        subprocess.Popen(["/bin/sh", "-c", script], start_new_session=True,
+        # The pid, the path and the app's arguments go in as arguments ($0, $1, the
+        # rest), never into the script text: a quote in a folder name cannot break it.
+        script = 'while kill -0 "$0" 2>/dev/null; do sleep 0.2; done; bundle=$1; shift; open "$bundle" --args "$@"'
+        subprocess.Popen(["/bin/sh", "-c", script, str(os.getpid()), str(bundle), *map(str, self._relaunch_args)],
+                         start_new_session=True,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _track(self, name, release, kind, error=None):

@@ -17,7 +17,7 @@ public final class UpdateModel: ObservableObject {
         case failed(String)
     }
 
-    @Published public private(set) var state: State = .idle
+    @Published public internal(set) var state: State = .idle
     public let updater: Updater
     private let canInstall: () -> Bool
 
@@ -29,11 +29,15 @@ public final class UpdateModel: ObservableObject {
     public var installAllowed: Bool { canInstall() }
 
     public func check(manual: Bool = false) async {
+        if case .installing = state { return }  // a check must not reset an install under way
+        let before = state
         state = .checking
         do {
             state = try await updater.check(manual: manual).map(State.available) ?? .upToDate
         } catch {
-            state = .failed("\(error)")
+            // Only when the user asked: a failed automatic check (offline at
+            // launch) says nothing, and keeps a release already known.
+            state = manual ? .failed("\(error)") : (before == .checking ? .idle : before)
         }
     }
 
@@ -45,6 +49,7 @@ public final class UpdateModel: ObservableObject {
             try await updater.install(release)
             NSApplication.shared.terminate(nil)
         } catch let error as UpdateError where error.step == .withdrawn {
+            state = .idle  // no longer installing
             await check(manual: true)  // paused or replaced since: show what the server offers now
         } catch {
             state = .failed("\(error)")

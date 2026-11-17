@@ -79,9 +79,10 @@ def next_version(tags, subjects):
     send the version back to one that exists -- bumped by the commit subjects."""
     found = [tuple(map(int, m.groups())) for t in tags if (m := re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", t))]
     major, minor, patch = max(found, default=(0, 0, 0))
-    if any(re.match(r"(BREAKING|bump):", s, re.I) for s in subjects):
+    # Conventional commits: `type(scope)!: subject`. A `!`, `BREAKING:` or `bump:` is a major.
+    if any(re.match(r"(BREAKING( CHANGE)?|bump)(\(.+?\))?:|\w+(\(.+?\))?!:", s) for s in subjects):
         return f"{major + 1}.0.0"
-    if any(re.match(r"feat:", s, re.I) for s in subjects):
+    if any(re.match(r"feat(\(.+?\))?:", s, re.I) for s in subjects):
         return f"{major}.{minor + 1}.0"
     return f"{major}.{minor}.{patch + 1}"
 
@@ -117,10 +118,11 @@ def codesign_cert(name, out):
                     "-addext", "basicConstraints=critical,CA:false",
                     "-addext", "keyUsage=critical,digitalSignature",
                     "-addext", "extendedKeyUsage=critical,codeSigning"], check=True, capture_output=True)
-    legacy = _pkcs12_legacy()
-    subprocess.run(["openssl", "pkcs12", "-export", *legacy, "-inkey", key, "-in", cert, "-out", p12,
-                    "-name", name, "-passout", f"pass:{password}"], check=True, capture_output=True)
-    key.unlink()
+    try:
+        subprocess.run(["openssl", "pkcs12", "-export", *_pkcs12_legacy(), "-inkey", key, "-in", cert, "-out", p12,
+                        "-name", name, "-passout", f"pass:{password}"], check=True, capture_output=True)
+    finally:
+        key.unlink(missing_ok=True)  # the unencrypted key never outlives this call
     return p12, password
 
 
@@ -148,7 +150,7 @@ def check_version(tag, root):
         if not found or found.group(1) != version:
             problems.append(f"{name} says {found.group(1) if found else 'nothing'}, the tag {version}")
     changelog = (root / "CHANGELOG.md").read_text()
-    section = re.search(rf"^## {re.escape(version)}\b.*?\n(.*?)(?=^## |\Z)", changelog, re.M | re.S)
+    section = re.search(rf"^## {re.escape(version)}[ \t]*\n(.*?)(?=^## |\Z)", changelog, re.M | re.S)
     if not section or not section.group(1).strip():
         problems.append(f"CHANGELOG.md has no '## {version}' section")
     return problems, section.group(1).strip() if section else ""
@@ -234,12 +236,22 @@ def main(argv=None):
         return
 
     if args.command == "next-version":
-        try:
-            # Every commit in the push, so a feat: under a later fix: still counts.
-            subjects = _git("log", "--pretty=%s", f"{args.since}..HEAD") if args.since else []
-        except subprocess.CalledProcessError:
-            subjects = []  # first push, or history rewritten: no such commit
-        version = next_version(_git("tag", "--list", "v[0-9]*"), subjects or _git("log", "-1", "--pretty=%s"))
+        number = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
+        key = lambda tag: tuple(map(int, number.fullmatch(tag).groups()))
+        tags = [t for t in _git("tag", "--list", "v[0-9]*") if number.fullmatch(t)]
+        here = [t for t in _git("tag", "--points-at", "HEAD") if number.fullmatch(t)]
+        if here:
+            # This commit is a release already (a re-run): the same version, not the next one.
+            version = max(here, key=key)[1:]
+        else:
+            try:
+                # Every commit since the last release, not only this push's: a
+                # feat: whose own run failed is still unreleased when a fix: follows.
+                since = max(tags, key=key) if tags else args.since
+                subjects = _git("log", "--pretty=%s", f"{since}..HEAD") if since else []
+            except subprocess.CalledProcessError:
+                subjects = []  # first push, or history rewritten: no such commit
+            version = next_version(tags, subjects or _git("log", "-1", "--pretty=%s"))
         print(f"tag=v{version}\nversion={version}")
         return
 
@@ -256,7 +268,18 @@ def main(argv=None):
 
     if args.command == "control":
         out = Path(args.dir)
-        body = json.loads((out / manifest_name(args.channel)).read_bytes())
+        name = manifest_name(args.channel)
+        data = (out / name).read_bytes()
+        # Sign again only what was signed before: a manifest someone changed on the
+        # release must not get a valid signature from a pause or a rollout change.
+        trusted = [_ed25519.public_key(_signing_key())] + ([base64.b64decode(args.public_key)] if args.public_key else [])
+        try:
+            signature = base64.b64decode((out / f"{name}.sig").read_text())
+        except (OSError, ValueError):
+            sys.exit(f"{name}.sig is missing or unreadable; not signing {name}")
+        if not any(_ed25519.verify(key, data, signature) for key in trusted):
+            sys.exit(f"the signature of {name} does not match this app's key: it was changed after signing; not signing")
+        body = json.loads(data)
         if args.rollout is not None:
             body["rollout"] = args.rollout
         if args.pause:
@@ -280,9 +303,20 @@ def manifest_name(channel):
     return "update-beta.json" if channel == "beta" else "update.json"
 
 
+def _signing_key():
+    """BEACON_SIGNING_KEY as bytes; an unset secret (empty in CI) or a mistyped one stops here."""
+    try:
+        secret = base64.b64decode(os.environ.get("BEACON_SIGNING_KEY", ""), validate=True)
+    except ValueError:
+        secret = b""
+    if len(secret) != 32:
+        sys.exit("BEACON_SIGNING_KEY is not a signing key (32 bytes, base64, from `beacon.release keygen`)")
+    return secret
+
+
 def _sign_into(out, body, public_key, channel="stable"):
     """Writes update(-beta).json and its .sig into `out`, signed with BEACON_SIGNING_KEY."""
-    secret = base64.b64decode(os.environ["BEACON_SIGNING_KEY"])
+    secret = _signing_key()
     # A manifest signed with the wrong key is one no installed app will accept,
     # and nothing would say so until users stopped getting updates.
     if public_key and base64.b64decode(public_key) != _ed25519.public_key(secret):

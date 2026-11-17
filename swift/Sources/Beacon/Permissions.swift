@@ -24,8 +24,8 @@ public enum Permissions {
 
     /// Shows the system prompt that leads to System Settings, if not trusted yet.
     public static func requestAccessibility() {
-        let prompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
+        // The value of kAXTrustedCheckOptionPrompt; the global itself is not concurrency-safe in Swift 6.
+        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
     // MARK: Input Monitoring (listening to the keyboard)

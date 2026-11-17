@@ -62,14 +62,25 @@ private func manifest(_ version: String) -> Data {
     // The server still offers it when the install asks again.
     let served = root.appendingPathComponent("served")
     try FileManager.default.createDirectory(at: served, withIntermediateDirectories: true)
-    try manifest("2.0.0").write(to: served.appendingPathComponent("update.json"))
-    try privateKey.signature(for: manifest("2.0.0")).base64EncodedData().write(to: served.appendingPathComponent("update.json.sig"))
+    // It installs what the server offers at that moment, so the manifest names the real archive.
+    let offered = Data("""
+    {"version": "2.0.0", "notes_url": "https://example.com/notes",
+     "assets": {"\(System.platformKey)": {"url": "\(archive.absoluteString)", "size": \(release.size), "sha256": "\(release.sha256)"}}}
+    """.utf8)
+    try offered.write(to: served.appendingPathComponent("update.json"))
+    try privateKey.signature(for: offered).base64EncodedData().write(to: served.appendingPathComponent("update.json.sig"))
     let updater = try Updater(repo: "me/app", version: "1.0.0",
                               publicKey: privateKey.publicKey.rawRepresentation.base64EncodedString(),
                               dataDirectory: root.appendingPathComponent("data"),
                               baseURL: served.appendingPathComponent("/"), bundleURL: installed)
     #expect(updater.installKind == .bundle)
-    try await updater.install(release)
+    // The helper that reopens the app is not started for real: its arguments are checked instead.
+    nonisolated(unsafe) var launched: [[String]] = []
+    updater.launch = { executable, arguments in launched.append([executable] + arguments) }
+    // What the caller holds is stale (a wrong hash): the install must not use it.
+    let held = Release(version: "2.0.0", url: archive, size: 1, sha256: "stale", notesURL: URL(string: "https://example.com")!)
+    try await updater.install(held)
+    #expect(launched.count == 1 && launched[0].first == "/bin/sh" && launched[0].last == installed.path)
     #expect(try String(contentsOf: installed.appendingPathComponent("Contents/MacOS/Demo"), encoding: .utf8) == "2.0.0")
     updater.cleanup()
     let left = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("data").path)

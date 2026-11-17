@@ -8,7 +8,7 @@ import IOKit
 enum System {
     /// beacon's own version, sent as lib_version; the Python client's
     /// __version__ is kept the same (ProtocolTests checks).
-    static let libVersion = "1.0.0"
+    static let libVersion = "1.1.0"
 
     static var arch: String {
         #if arch(arm64)
@@ -21,13 +21,23 @@ enum System {
     /// The manifest key for this build: macos-arm64 or macos-x64.
     static var platformKey: String { "macos-\(arch)" }
 
+    /// As the Python client reports them, so the same machine is one value in
+    /// the reports: "15.1" without a zero patch, the locale without "@rg=...".
+    static func osVersion(_ major: Int, _ minor: Int, _ patch: Int) -> String {
+        patch == 0 ? "\(major).\(minor)" : "\(major).\(minor).\(patch)"
+    }
+
+    static func locale(_ identifier: String) -> String {
+        String(identifier.split(separator: "@", omittingEmptySubsequences: false).first ?? "")
+    }
+
     static func context() -> [String: Any] {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         return [
             "os": "macOS",
-            "os_version": "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)",
+            "os_version": osVersion(v.majorVersion, v.minorVersion, v.patchVersion),
             "arch": arch,
-            "locale": Locale.current.identifier,
+            "locale": locale(Locale.current.identifier),
             "cpu_count": ProcessInfo.processInfo.activeProcessorCount,
             "memory_gb": Int(ProcessInfo.processInfo.physicalMemory >> 30),
             "model": sysctl("hw.model"),

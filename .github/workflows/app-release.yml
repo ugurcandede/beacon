@@ -77,9 +77,14 @@ on:
       version:
         value: ${{ jobs.version.outputs.version }}
 
+# The caller grants contents: write for the release; only the release job gets it.
+# The jobs that run the app's own code (its dependencies, pre-build) can read, no more,
+# and no checkout leaves a token on disk.
 jobs:
   version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       tag: ${{ steps.next.outputs.tag }}
       version: ${{ steps.next.outputs.version }}
@@ -87,13 +92,20 @@ jobs:
       artifacts: ${{ steps.name.outputs.prefix }}
     steps:
       - id: name
-        run: echo "prefix=build-$(uuidgen | cut -c1-8)" >> "$GITHUB_OUTPUT"
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          # Anything but "windows" would build on macOS: a typo must not pass for a platform.
+          python3 -c 'import json, os, sys; bad = set(json.loads(os.environ["PLATFORMS"])) - {"macos", "windows"}; sys.exit(f"::error::unknown platforms: {sorted(bad)}" if bad else 0)'
+          echo "prefix=build-$(uuidgen | cut -c1-8)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       # This workflow's own beacon, for its actions and its Python package.
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: .beacon
@@ -107,6 +119,8 @@ jobs:
       matrix:
         platform: ${{ fromJSON(inputs.platforms) }}
     runs-on: ${{ matrix.platform == 'windows' && 'windows-latest' || 'macos-latest' }}
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.version.outputs.version }}
       HAS_CODESIGN: ${{ secrets.codesign-p12 != '' }}
@@ -116,8 +130,11 @@ jobs:
         working-directory: ${{ inputs.path }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: .beacon
@@ -151,6 +168,8 @@ jobs:
   release:
     needs: [version, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       TAG: ${{ needs.version.outputs.tag }}
       VERSION: ${{ needs.version.outputs.version }}
@@ -162,8 +181,11 @@ jobs:
       HAS_ANNOTATION_KEY: ${{ secrets.annotation-key != '' }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: .beacon
@@ -220,8 +242,15 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
         run: |
           prerelease=(); [ "$CHANNEL" = beta ] && prerelease=(--prerelease)
-          gh release create "$TAG" dist/* "${{ steps.manifest.outputs.manifest }}" "${{ steps.manifest.outputs.signature }}" \
-            --draft --generate-notes --target "$GITHUB_SHA" ${prerelease[@]+"${prerelease[@]}"}
+          # A re-run after a later step failed finds the release there (the version
+          # job gives the same tag for a commit that has one): the files are put
+          # again, nothing is made twice.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* "${{ steps.manifest.outputs.manifest }}" "${{ steps.manifest.outputs.signature }}" --clobber
+          else
+            gh release create "$TAG" dist/* "${{ steps.manifest.outputs.manifest }}" "${{ steps.manifest.outputs.signature }}" \
+              --draft --generate-notes --target "$GITHUB_SHA" ${prerelease[@]+"${prerelease[@]}"}
+          fi
           gh release edit "$TAG" --draft=false
           if [ "$CHANNEL" = beta ]; then
             # releases/latest never points at a prerelease: the beta manifest rides on the latest stable one.
@@ -240,6 +269,7 @@ jobs:
           asset: ${{ steps.mac.outputs.zip }}
           token: ${{ secrets.tap-token }}
       - if: inputs.publish && env.HAS_ANNOTATION_KEY == 'true'
+        continue-on-error: true   # a marker on a chart: the release is out without it
         uses: ./.beacon/.github/actions/annotate
         with:
           app: ${{ steps.assets.outputs.app }}

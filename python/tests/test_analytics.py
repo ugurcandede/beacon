@@ -182,12 +182,12 @@ def test_heartbeat_being_sent_is_not_changed(tmp_path):
     assert [e["props"]["duration_s"] for e in a._state["queue"]] == [300, 300]
 
 
-def test_disabling_keeps_the_batch_being_sent(tmp_path):
+def test_disabling_drops_everything_also_the_batch_being_sent(tmp_path):
     a = analytics.Analytics("lumea", "1.0.0", tmp_path, endpoint=OFFLINE)
     a.track("sending"), a.track("waiting")
     a._in_flight = 1
     a.enabled = False
-    assert names(a) == ["sending"]
+    assert names(a) == []  # privacy.md: turning statistics off deletes what was waiting
 
 
 def test_heartbeats_of_another_session_do_not_fold(tmp_path, monkeypatch):

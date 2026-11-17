@@ -22,8 +22,10 @@ gets through, heartbeats fold into one event per stretch instead of piling up.
 track() only appends; one daemon thread does the sending.
 """
 
+import http.client
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -44,6 +46,7 @@ _SESSION_IDLE_SECONDS = 30 * 60  # a gap this long (the machine slept) starts a 
 _SESSION_MAX_SECONDS = 24 * 3600
 _BATCH = 100
 _MAX_QUEUE = 1000
+_REJECTED = (400, 413, 422)  # answers that are about the batch itself
 
 
 class Analytics:
@@ -59,6 +62,7 @@ class Analytics:
         self._lock = threading.Lock()
         self._sending = threading.Lock()  # one flush at a time, or both send the same batch
         self._in_flight = 0  # events at the head of the queue a flush is sending: not to be touched
+        self._epoch = 0  # goes up when the queue is dropped, so a send that was under way deletes nothing after
         self._wake = threading.Event()
         self._started = time.monotonic()
         self._session, self._session_start, self._last_event = _uuid7(), time.time(), time.time()
@@ -70,11 +74,26 @@ class Analytics:
                        "queue": [], "active_day": None, "consent": None if enabled is None else bool(enabled)}
         # A new install, not an app that already counted this user before it moved to beacon.
         self._new_install = install_id is None
+        # The file is there but cannot be read (locked, no permission): this run
+        # does not know the user's choice, so it sends nothing and saves nothing.
+        self._frozen = False
         try:
-            self._state.update(json.loads(self._path.read_text(encoding="utf-8")))
+            text = self._path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            pass  # the first run
+        except OSError as e:
+            log.warning("analytics state unreadable, off for this run: %s", e)
+            self._frozen = True
+        else:
             self._new_install = False
-        except (OSError, ValueError):
-            pass
+            loaded = _valid_state(text)
+            if loaded is None:
+                # Broken: the user's choice was in it. Off until they choose again
+                # (an app that asks for consent asks again).
+                log.warning("analytics state broken, starting over with statistics off")
+                self._state.update(enabled=False, consent=None)
+            else:
+                self._state.update(loaded)
 
     @property
     def install_id(self) -> str:
@@ -82,14 +101,20 @@ class Analytics:
 
     @property
     def enabled(self) -> bool:
-        return self._state["enabled"]
+        return self._state["enabled"] and not self._frozen
 
     @enabled.setter
     def enabled(self, value: bool):
+        if self._frozen:
+            return
         with self._lock:
             self._state["enabled"] = bool(value)
             if not value:
-                del self._state["queue"][self._in_flight:]
+                # Everything, also what a send has on its way: if that send fails,
+                # nothing is left to go out later.
+                self._state["queue"].clear()
+                self._in_flight = 0
+                self._epoch += 1
             self._save()
 
     @property
@@ -132,7 +157,7 @@ class Analytics:
         if not self.enabled:
             return
         with self._lock:
-            self._append(self._event(name, props))
+            self._append(self._event(name, _jsonable(props) if isinstance(props, dict) else {}))
 
     def screen(self, name, props=None):
         """A window, page or panel the user is looking at: PostHog's $screen."""
@@ -148,8 +173,9 @@ class Analytics:
         return self.flush(timeout)
 
     def flush(self, timeout=10) -> bool:
-        """Sends what is queued (nothing before the user's consent, when asked for)."""
-        if self.consent_needed:
+        """Sends what is queued (nothing before the user's consent, when asked
+        for, and nothing while turned off)."""
+        if self.consent_needed or not self.enabled:
             return False
         if not self._sending.acquire(timeout=timeout):
             return False
@@ -195,17 +221,22 @@ class Analytics:
             with self._lock:
                 batch = [dict(e, props=dict(e["props"])) for e in self._state["queue"][:_BATCH]]
                 self._in_flight = len(batch)
+                epoch = self._epoch
             if not batch:
                 return True
+            sent = False
             try:
-                if not self._send(batch, timeout):
-                    return False
+                sent = self._send(batch, timeout)
             finally:
+                # One step under the lock: the batch is taken off and no longer
+                # counts as in flight together, so nothing can change in between.
                 with self._lock:
                     self._in_flight = 0
-            with self._lock:
-                del self._state["queue"][:len(batch)]
-                self._save()
+                    if sent and epoch == self._epoch:  # turned off meanwhile: the queue was dropped already
+                        del self._state["queue"][:len(batch)]
+                        self._save()
+            if not sent or epoch != self._epoch:
+                return False
 
     def _run(self):
         next_heartbeat = time.monotonic() + _HEARTBEAT_SECONDS
@@ -236,15 +267,19 @@ class Analytics:
             with urllib.request.urlopen(request, timeout=timeout, context=system.ssl_context()):
                 return True
         except urllib.error.HTTPError as e:
-            # A batch the Worker rejects would be rejected forever; drop it
-            # rather than let it block everything queued behind it.
-            log.debug("analytics batch rejected: %s", e)
-            return 400 <= e.code < 500
-        except OSError as e:
+            # A batch the Worker says is wrong (400, too large 413, 422) would be
+            # wrong forever: dropped, or it blocks everything behind it. Any other
+            # answer (a proxy's 403 or 407, a 429, a 5xx) says nothing about the
+            # batch: it waits and goes again.
+            log.debug("analytics batch not accepted: %s", e)
+            return e.code in _REJECTED
+        except (OSError, http.client.HTTPException) as e:  # a broken answer is not an OSError
             log.debug("analytics flush failed: %s", e)
             return False
 
     def _save(self):
+        if self._frozen:
+            return
         tmp = self._path.with_suffix(".tmp")
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -252,6 +287,40 @@ class Analytics:
             os.replace(tmp, self._path)
         except OSError as e:
             log.debug("analytics state not saved: %s", e)
+
+
+def _jsonable(value):
+    """`value` as JSON can carry it: what is not JSON (a Path, a date, NaN) goes as
+    text, so one odd prop cannot break the queue."""
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    return str(value)
+
+
+def _valid_state(text):
+    """The state file's content with fields of the wrong type left out, or None
+    when it is not a state at all (cut short, or not an object)."""
+    try:
+        state = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(state, dict):
+        return None
+    types = {"install_id": str, "enabled": bool, "queue": list, "active_day": (str, type(None)),
+             "consent": (bool, type(None)), "last_version": (str, type(None)), "running": bool}
+    good = {k: v for k, v in state.items() if k not in types or isinstance(v, types[k])}
+    if "queue" in good:
+        good["queue"] = [e for e in good["queue"] if isinstance(e, dict) and isinstance(e.get("props"), dict)
+                         and isinstance(e.get("name"), str)]
+    if "enabled" in state and "enabled" not in good:
+        good["enabled"] = False  # a choice that cannot be read is not a yes
+    return good
 
 
 def _uuid7():

@@ -7,7 +7,7 @@ name = "beacon"
 license = "LicenseRef-Proprietary"
 license-files = ["../LICENSE"]
 dynamic = ["version"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"  # tomllib, for beacon.toml
 dependencies = ["certifi"]
 
 [project.optional-dependencies]

@@ -5,7 +5,7 @@ cd python && pytest -q                 # Python
 swift test                             # Swift (Package.swift at the root)
 cd worker && npm test && npx tsc -p .  # Worker
 cd posthog && pytest -q                # dashboards; POSTHOG_KEY=... python setup.py --check runs every query
-examples/run-local.sh <work-dir>       # macOS self-update end to end (INSTALL=brew for Homebrew)
+examples/run-local.sh <work-dir>       # macOS self-update end to end (INSTALL=brew for Homebrew); wipes <work-dir>, so only an empty one or its own
 ```
 
 The clients also check the shared vectors in `protocol/vectors/`, so a language that falls
@@ -15,9 +15,9 @@ behind the protocol fails its tests.
 
 `.github/workflows/ci.yml`, on every push that changes more than docs:
 
-1. **Tests**: Python (macOS, Windows), Swift, Worker, dashboards.
+1. **Tests**: Python (macOS, Windows), Swift (also type-checked in Swift 6 mode), Worker, dashboards.
 2. **Release checks**: every release action as an app runs it; the reusable app release on both
-   demos (built and signed, nothing published; only when the release code changed); the Windows
+   demos (built and signed, nothing published); the Windows
    self-update end to end.
 3. **Deploy**: the Worker, from main.
 

@@ -34,11 +34,20 @@ export async function flags(url: URL, env: Env): Promise<Response> {
   if (!env.APPS.split(",").includes(app) || !id) {
     return new Response("unknown app or no id", { status: 400 });
   }
-  const response = await fetch(`${env.POSTHOG_HOST}/flags/?v=2`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ api_key: env.POSTHOG_KEY, distinct_id: id, person_properties: { product: app } }),
-  });
-  if (!response.ok) return new Response(null, { status: 502 }); // the client keeps its last answer
-  return Response.json(simplify(await response.json()));
+  // 502 whenever the answer is not a full one: the client then keeps its last
+  // answer, instead of replacing it with flags that are missing or all off.
+  const failed = new Response(null, { status: 502 });
+  try {
+    const response = await fetch(`${env.POSTHOG_HOST}/flags/?v=2`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: env.POSTHOG_KEY, distinct_id: id, person_properties: { product: app } }),
+    });
+    if (!response.ok) return failed;
+    const answer = (await response.json()) as { errorsWhileComputingFlags?: boolean; quotaLimited?: string[] };
+    if (answer.errorsWhileComputingFlags || answer.quotaLimited?.includes("feature_flags")) return failed;
+    return Response.json(simplify(answer as never));
+  } catch {
+    return failed; // unreachable, or not JSON
+  }
 }

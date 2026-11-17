@@ -22,8 +22,20 @@ PY=${2:-python3}
 PORT=8765
 ENDPOINT=${BEACON_ENDPOINT:-http://127.0.0.1:8787/v1/events}
 
+# The work folder is wiped: only one this script made (or an empty one) qualifies.
+case "$WORK" in /*) ;; *) WORK="$PWD/$WORK" ;; esac   # the demos run from /, so their data_dir must be absolute
+MARK="$WORK/.beacon-run-local"
+if [ -e "$WORK" ] && [ ! -e "$MARK" ] && [ -n "$(ls -A "$WORK" 2>/dev/null)" ]; then
+  echo "refusing to delete $WORK: it has files and was not made by this script (no .beacon-run-local in it)" >&2
+  exit 2
+fi
+if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
+  echo "port $PORT is in use: stop what listens there first" >&2
+  exit 2
+fi
 rm -rf "$WORK"
 mkdir -p "$WORK"/{build,serve/py,serve/swift,Applications}
+touch "$MARK"
 # Start from a fresh install: no update log, analytics queue or install id.
 
 KEYS=$("$PY" -m beacon.release keygen)

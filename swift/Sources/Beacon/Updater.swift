@@ -107,12 +107,13 @@ public final class Updater: @unchecked Sendable {
         analytics?.track("update_started", ["to": release.version, "kind": kind])
         do {
             let offered = try await check(manual: true)
-            guard offered?.version == release.version else {
+            guard let offered, offered.version == release.version else {
                 throw UpdateError(.withdrawn, "\(release.version) is no longer offered")
             }
+            // What the server signs now, not what the caller has held since.
             switch installKind {
-            case .bundle: try await installBundle(release)
-            case .brew: try installBrew(release)
+            case .bundle: try await installBundle(offered)
+            case .brew: try installBrew(offered)
             case nil: throw UpdateError(.install, "this build cannot update itself")
             }
         } catch {
@@ -202,7 +203,14 @@ public final class Updater: @unchecked Sendable {
         do {
             try fm.moveItem(at: new, to: bundleURL)
         } catch {
-            try? fm.moveItem(at: old, to: bundleURL)
+            // Put the old one back; a half-copied new one must not be in its way.
+            try? fm.removeItem(at: bundleURL)
+            do {
+                try fm.moveItem(at: old, to: bundleURL)
+            } catch let restore {
+                log("could not put the old bundle back from \(old.path): \(restore)")
+                throw UpdateError(.install, "the app is in \(old.path): the update failed and it could not be put back")
+            }
             throw error
         }
         log("new bundle in place at \(bundleURL.path)")
@@ -226,15 +234,25 @@ public final class Updater: @unchecked Sendable {
         log("downloading \(release.url) (\(release.size) bytes)")
         let downloaded: URL
         do {
-            (downloaded, _) = try await URLSession.shared.download(from: release.url)
+            let response: URLResponse
+            (downloaded, response) = try await URLSession.shared.download(from: release.url)
+            // An error page is not the asset: a failed download, not a failed check of it.
+            if let status = (response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {
+                try? FileManager.default.removeItem(at: downloaded)
+                throw UpdateError(.download, "HTTP \(status)")
+            }
+        } catch let error as UpdateError {
+            log("download failed: \(error)")
+            throw error
         } catch {
             log("download failed: \(error)")
             throw UpdateError(.download, error.localizedDescription)
         }
         try FileManager.default.moveItem(at: downloaded, to: destination)
-        guard try sha256(of: destination) == release.sha256 else {
+        let size = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? Int) ?? -1
+        guard size == release.size, try sha256(of: destination) == release.sha256 else {
             try? FileManager.default.removeItem(at: destination)
-            throw UpdateError(.verify, "sha256 mismatch")
+            throw UpdateError(.verify, size == release.size ? "sha256 mismatch" : "size is not the manifest's \(release.size)")
         }
         log("download verified")
     }
@@ -277,7 +295,12 @@ public final class Updater: @unchecked Sendable {
     /// Numeric dot-separated comparison: 1.10.0 is newer than 1.9.3.
     /// Non-numeric parts ("dev") count as 0.
     static func isNewer(_ candidate: String, than current: String) -> Bool {
-        func parts(_ s: String) -> [Int] { s.split(separator: ".").map { Int($0) ?? 0 } }
+        // As the Python client: an empty part ("1..2") counts, and a part that is not all digits is 0.
+        func parts(_ s: String) -> [Int] {
+            s.split(separator: ".", omittingEmptySubsequences: false).map { part in
+                !part.isEmpty && part.allSatisfy { $0.isASCII && $0.isNumber } ? Int(part) ?? 0 : 0
+            }
+        }
         var a = parts(candidate), b = parts(current)
         let width = max(a.count, b.count)
         a += Array(repeating: 0, count: width - a.count)
@@ -307,11 +330,20 @@ public final class Updater: @unchecked Sendable {
     private func relaunch() {
         // Reopen by path once this process is gone: another copy with the same
         // bundle id may be registered with LaunchServices.
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let script = "while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; open '\(bundleURL.path)'"
+        launch("/bin/sh", Self.relaunchArguments(pid: ProcessInfo.processInfo.processIdentifier, bundle: bundleURL))
+    }
+
+    /// The pid and the path go in as arguments ($0, $1), never into the script
+    /// text: a quote in a folder name cannot break it.
+    static func relaunchArguments(pid: Int32, bundle: URL) -> [String] {
+        ["-c", #"while kill -0 "$0" 2>/dev/null; do sleep 0.2; done; open "$1""#, "\(pid)", bundle.path]
+    }
+
+    /// Starts the helper that reopens the app; replaced in tests.
+    var launch: (_ executable: String, _ arguments: [String]) -> Void = { executable, arguments in
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", script]
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
         // Inheriting our stdout/stderr would tie the helper to whoever reads them.
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -335,7 +367,7 @@ public final class Updater: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         if logOutput, let handle = try? FileHandle(forWritingTo: logURL) {
-            handle.seekToEndOfFile()
+            _ = try? handle.seekToEnd()
             process.standardOutput = handle
             process.standardError = handle
         }
@@ -360,13 +392,7 @@ public final class Updater: @unchecked Sendable {
     private func log(_ message: String) {
         let line = Data("\(Log.timestamp()) \(message)\n".utf8)
         try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
-        if let handle = try? FileHandle(forWritingTo: logURL) {
-            handle.seekToEndOfFile()
-            handle.write(line)
-            try? handle.close()
-        } else {
-            try? line.write(to: logURL)
-        }
+        Log.append(line, to: logURL)
     }
 }
 

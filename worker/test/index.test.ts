@@ -110,7 +110,7 @@ describe("posthog-js proxy", () => {
     const headers = new Headers(init.headers);
     expect(headers.get("x-forwarded-for")).toBe("203.0.113.9");
     expect(headers.get("cookie")).toBeNull();
-    expect(new TextDecoder().decode(init.body as ArrayBuffer)).toBe("payload");
+    expect(await new Response(init.body as ReadableStream).text()).toBe("payload"); // streamed through, not held
   });
 });
 
@@ -137,5 +137,117 @@ describe("feature flags", () => {
   it("answers 502 when PostHog fails, so the client keeps its last answer", async () => {
     vi.stubGlobal("fetch", async () => new Response(null, { status: 500 }));
     expect((await handle(new Request("https://beacon.test/v1/flags?app=lumea&id=abc"))).status).toBe(502);
+  });
+});
+
+describe("hardening", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("answers 400, not an exception, to a body it cannot read as a batch", async () => {
+    vi.stubGlobal("fetch", async () => new Response(null, { status: 200 }));
+    for (const body of [{ ...vectors.valid, events: [null] }, { ...vectors.valid, context: null }, [], "x", 5, null]) {
+      expect((await handle(post(body))).status).toBe(400);
+    }
+  });
+
+  it("answers 502 when PostHog cannot be reached, so the client retries", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("network");
+    });
+    expect((await handle(post(vectors.valid))).status).toBe(502);
+  });
+
+  it("answers 400 when PostHog rejects the batch, so the client drops it instead of retrying forever", async () => {
+    vi.stubGlobal("fetch", async () => new Response("bad", { status: 400 }));
+    expect((await handle(post(vectors.valid))).status).toBe(400);
+    for (const status of [401, 429, 500]) {
+      vi.stubGlobal("fetch", async () => new Response(null, { status }));
+      expect((await handle(post(vectors.valid))).status).toBe(502);
+    }
+  });
+
+  it("sends PostHog nothing of the request but the batch: no client headers, no IP", async () => {
+    const upstream = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", upstream);
+    const request = new Request("https://beacon.test/v1/events", {
+      method: "POST",
+      body: JSON.stringify(vectors.valid),
+      headers: { "cf-connecting-ip": "203.0.113.9", "x-forwarded-for": "203.0.113.9", cookie: "a=b" },
+    });
+    await handle(request);
+    const init = (upstream.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(Object.keys(init.headers as object)).toEqual(["Content-Type"]);
+    expect(init.body as string).not.toContain("203.0.113.9");
+  });
+
+  it("measures the batch in bytes", async () => {
+    vi.stubGlobal("fetch", async () => new Response(null, { status: 200 }));
+    const big = { ...vectors.valid, context: { note: "€".repeat(400_000) } }; // 1.2 MB as UTF-8, 400k characters
+    expect((await handle(post(big))).status).toBe(413);
+  });
+
+  it("drops events and props only PostHog itself may send", () => {
+    const batch = structuredClone(vectors.valid) as never as { events: { name: string; props: Record<string, unknown> }[] };
+    batch.events = [
+      { ...batch.events[0], name: "$create_alias", props: { alias: "someone-else" } },
+      { ...batch.events[0], name: "$identify", props: {} },
+      { ...batch.events[0], name: "$screen", props: { $screen_name: "Main" } },
+      { ...batch.events[0], name: "$exception", props: {} },
+      { ...batch.events[0], name: "saved", props: { $unset: ["os"], $groups: { x: 1 }, $ip: "1.2.3.4", product: "other", channel: "web", ok: 1 } },
+    ];
+    const out = toPostHog(batch as never, cf).batch;
+    expect(out.map((e) => e.event)).toEqual(["$screen", "$exception", "saved"]);
+    const props = out[2].properties as Record<string, unknown>;
+    expect(props.ok).toBe(1);
+    expect(props.$unset).toBeUndefined();
+    expect(props.$groups).toBeUndefined();
+    expect(props.$ip).toBeUndefined();
+    expect(props.product).toBe("lumea"); // the app cannot pass for another product
+    const withSet = toPostHog({ ...(batch as object), events: [{ ...batch.events[4], props: { $set: { mode: "hold", os: "fake" } } }] } as never, cf);
+    const set = (withSet.batch[0].properties as { $set: Record<string, unknown> }).$set;
+    expect(set.mode).toBe("hold"); // an app's own person properties are kept
+    expect(set.os).toBe(vectors.valid.context.os); // the machine context wins
+    expect(props.channel).toBe("app");
+  });
+
+  it("answers 502 to a flags answer PostHog could not compute, so the client keeps its last one", async () => {
+    const answer = (extra: object) => async () => Response.json({ flags: { a: { key: "a", enabled: true } }, ...extra });
+    vi.stubGlobal("fetch", answer({ errorsWhileComputingFlags: true }));
+    const get = () => handle(new Request("https://beacon.test/v1/flags?app=lumea&id=m1"));
+    expect((await get()).status).toBe(502);
+    vi.stubGlobal("fetch", answer({ quotaLimited: ["feature_flags"] }));
+    expect((await get()).status).toBe(502);
+    vi.stubGlobal("fetch", async () => new Response("not json", { status: 200 }));
+    expect((await get()).status).toBe(502);
+    vi.stubGlobal("fetch", answer({ errorsWhileComputingFlags: false }));
+    expect((await get()).status).toBe(200);
+  });
+
+  it("proxies only what posthog-js sends: GET, POST and OPTIONS, without credentials", async () => {
+    const upstream = vi.fn(async () => new Response("ok"));
+    vi.stubGlobal("fetch", upstream);
+    for (const method of ["PUT", "DELETE", "PATCH"]) {
+      expect((await handle(new Request("https://beacon.test/ingest/e/", { method }))).status).toBe(405);
+    }
+    expect(upstream).not.toHaveBeenCalled();
+    await handle(new Request("https://beacon.test/ingest/e/?ip=0", {
+      method: "POST",
+      body: "{}",
+      headers: { authorization: "Bearer phx_secret", cookie: "a=b", "content-type": "text/plain", "user-agent": "UA" },
+    }));
+    const [target, init] = upstream.mock.calls[0] as unknown as [string, RequestInit];
+    expect(target).toBe("https://posthog.invalid/e/?ip=0");
+    const headers = new Headers(init.headers);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("cookie")).toBeNull();
+    expect(headers.get("content-type")).toBe("text/plain");
+    expect(headers.get("user-agent")).toBe("UA");
+  });
+
+  it("keeps the proxy on the PostHog host whatever the path", () => {
+    for (const path of ["/ingest/../admin", "/ingest//evil.example/x", "/ingest/@evil.example", "/ingest/%2e%2e/x"]) {
+      const target = new URL(proxyTarget(new URL("https://beacon.test" + path), "https://posthog.invalid"));
+      expect(target.host).toBe("posthog.invalid");
+    }
   });
 });

@@ -23,8 +23,7 @@ jobs:
 
   ci:
     needs: check
-    uses: ./.github/workflows/ci.yml
-    secrets: inherit
+    uses: ./.github/workflows/ci.yml   # no secrets: a tag run never deploys
 
   github:
     needs: [check, ci]
@@ -33,11 +32,23 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - env:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ needs.check.outputs.notes }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "beacon $GITHUB_REF_NAME" --notes "$NOTES"
+          # A re-run finds the release there: nothing is made twice.
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --title "beacon $GITHUB_REF_NAME" --notes "$NOTES"
+          # The major tag (v1) follows the highest release of that major only: a
+          # patch on an older line (v1.0.1 after v1.2.0) must not move it back.
           major="${GITHUB_REF_NAME%%.*}"
-          git tag -f "$major" "$GITHUB_REF_NAME"
-          git push -f origin "refs/tags/$major"
+          git fetch -q --tags
+          highest=$(git tag --list "$major.*" | sort -V | tail -1)
+          if [ "$highest" = "$GITHUB_REF_NAME" ]; then
+            git tag -f "$major" "$GITHUB_REF_NAME"
+            git push -f origin "refs/tags/$major"
+          else
+            echo "$major stays at $highest"
+          fi

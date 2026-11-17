@@ -56,13 +56,22 @@ Each GitHub release carries `update.json` and `update.json.sig` (Ed25519 over th
   IOPlatformUUID on macOS, MachineGuid on Windows; `""` when the OS does not say. The Worker
   uses it as the person, so one machine running several apps is one person; else `install_id`.
 - `sent_at`: client clock when the batch went out. PostHog shifts every `ts` by
-  `sent_at - its own now`, so events kept offline land at the right time on a wrong clock.
+  `its own now - sent_at`, so events kept offline land at the right time on a wrong clock.
 - `context` is the machine; `model` is macOS only; screens are the main display in points.
   Apps may add their own keys.
 - `app_version` on an event is the version that recorded it; the one sending may be newer.
 - `uuid` lets the backend drop an event sent twice.
-- At most 100 events per batch. `app` must be in the Worker's `APPS`.
-- 204 accepted, 4xx rejected (the client drops the batch), anything else: retried later.
+- At most 100 events and 1 MB (bytes) per batch. `app` must be in the Worker's `APPS`.
+- Prop values that are not JSON (a path, a date, NaN) are sent as text; a client never fails on them.
+- Event names starting with `$` are PostHog's own: only `$screen` and `$exception` are taken, the
+  rest dropped. The props `$set_once`, `$unset`, `$groups`, `$ip`, `$anon_distinct_id` are removed;
+  `$set` (an app's own person properties) is kept, under the machine context.
+- The Worker adds the country, region and city Cloudflare sees; no postal code, no coordinates, no IP.
+- Answers: 204 accepted. 400, 413 and 422 are about the batch itself: the client drops it. Any
+  other answer (a proxy's 403, a 429, a 5xx, no answer) says nothing about the batch: it is kept
+  and sent again later. The Worker answers 400 when PostHog rejects the batch, 502 when PostHog
+  cannot take it now, 503 over the rate limit.
+- A batch with nobody to count it under (no `machine_id` and an empty `install_id`) is invalid.
 - A 0.1 batch (no `machine_id`, `sent_at`, per-event `uuid`/`app_version`) is still accepted.
 
 ### Events every client records
@@ -94,7 +103,9 @@ durations added; nothing a send has in flight is changed.
 
 The Worker asks PostHog for this machine (person property `product` = the app) and answers each
 flag's value (the variant, else true or false) and its JSON payload, if any. 400 for an app not in
-`APPS` or no id, 502 when PostHog fails: the client keeps its last answer.
+`APPS` or no id, 502 when PostHog fails or could not compute every flag: the client keeps its
+last answer. The id is the machine id, else the install id; a client with neither does not ask.
+A client whose user has not agreed to statistics, or turned them off, does not ask either.
 
 ## Website proxy: `/ingest/...`
 

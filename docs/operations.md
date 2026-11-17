@@ -28,6 +28,8 @@ BEACON_SIGNING_KEY=... python -m beacon.release control out --pause    # or --re
 gh release upload vX.Y.Z -R me/myapp out/update.json out/update.json.sig --clobber
 ```
 
+- A release run that failed after publishing (the cask, the chart marker) can be re-run: it
+  finishes that release and makes no other.
 - **A bad release**: pause it. No one else gets it, not even a copy already showing the update;
   copies that installed it keep it. Then release a fix, or resume.
 - **A staged release**: release with `rollout: "10"`, watch the "Güncellemeler" and
@@ -68,7 +70,12 @@ POSTHOG_KEY=phx_... python posthog/setup.py
 
 - A new app: add it to `PRODUCTS` in `setup.py` and run it.
 - Test builds report as `<app>-test`, and test sites run on `localhost`; reports leave both out.
-- Alerts (e-mail): errors, failed updates, a product with no users for a day.
+- Alerts (e-mail): errors, failed updates, and for each product in `LIVE` (`setup.py`: the ones
+  whose released app is on beacon) a day without users. Add a product to `LIVE` when it ships.
+- A run of `setup.py` replaces the tiles it made (by name) and leaves ones added by hand; it makes
+  the new tiles before it removes the old.
+- The limit on what PostHog takes in is set in PostHog (billing limits): the project token is
+  public, so the Worker's rate limit only stops a client gone wrong.
 
 ## When an alert arrives
 

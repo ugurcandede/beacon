@@ -4,6 +4,9 @@ description: >
   beacon's update clients check. Upload both with the release assets.
 
 inputs:
+  config:
+    description: The app's beacon.toml, when it is not at the repository root.
+    default: beacon.toml
   tag:
     description: The release tag, e.g. v1.4.0 (the version is the tag without the v).
     required: true
@@ -52,6 +55,7 @@ runs:
         # beacon.release needs only the standard library, so it runs from this
         # checkout of the action: nothing to install.
         PYTHONPATH: ${{ github.action_path }}/../../../python
+        CONFIG: ${{ inputs.config }}
         # Inputs go through the environment, never into the script text, so a
         # tag or path cannot inject shell.
         ASSETS: ${{ inputs.assets }}
@@ -69,7 +73,7 @@ runs:
           [ -n "${line//[[:space:]]/}" ] && assets+=("$line")
         done <<< "$ASSETS"
         PY=python3; [ "$RUNNER_OS" = Windows ] && PY=python  # Windows runners have python, not always python3
-        PUBLIC_KEY=${PUBLIC_KEY:-$($PY -m beacon.release config public_key)}
+        PUBLIC_KEY=${PUBLIC_KEY:-$($PY -m beacon.release config public_key --config "$CONFIG")}
         if [ -z "$PUBLIC_KEY" ]; then echo "::error::no public-key input and no public_key in beacon.toml"; exit 1; fi
         rollout=(--channel "$CHANNEL"); [ -n "$ROLLOUT" ] && rollout+=(--rollout "$ROLLOUT")
         [ -n "$MIN_VERSION" ] && rollout+=(--min-version "$MIN_VERSION")

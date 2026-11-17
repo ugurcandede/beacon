@@ -12,22 +12,27 @@ Events go through a Cloudflare Worker to PostHog (EU).
   itself never leaves the machine) and a random id per install.
 - **The machine**: OS and version, CPU architecture and count, memory, Mac model, screen size,
   locale, the app's and beacon's versions.
-- **Where**: country, region and city as Cloudflare sees the request. The IP address is dropped
-  before PostHog.
+- **Where**: country, region and city as Cloudflare sees the request; no postal code, no
+  coordinates. The IP address is dropped before PostHog.
 - **What happens**: the app opening and quitting, how long it runs, updates, windows opened,
-  launch time and memory use, errors and crash reports (function and file names, home folder
-  replaced by `~`), and the app's own events.
-- **Never**: file contents, typed text, audio, names of devices or files, paths outside the app.
+  launch time and memory use, and the app's own events.
+- **Errors**: the type and the text of an error, and where in the code it happened (function and
+  file names). The home folder is replaced by `~`, so the user name is not in it. An error's text
+  can name what it was about, for example a file that could not be opened.
+- **Never collected**: file contents, audio, key presses, account names or passwords. The one
+  place a value from the app can show up is the text of an error.
 
 Events wait on the machine while it is offline (at most 1000) and are sent later with the time
 they happened. Turning statistics off deletes what was waiting.
 
-Feature flags: the app asks the Worker which features are on for the machine id and the app.
+Feature flags: the app asks the Worker which features are on for the machine id and the app,
+only once the user has agreed to statistics and while they are on.
 
 ## Sent from the websites
 
-posthog-js: page views, clicks, downloads and copied install commands, session recordings with
-inputs masked, heatmaps, page speed, browser and device, referrer, location (IPs anonymized).
+posthog-js: page views, clicks (also clicks that do nothing), downloads and copied install
+commands, session recordings with inputs masked, heatmaps, page speed, JavaScript errors and
+console messages of the page, browser and device, referrer, location (IPs anonymized).
 Recordings are kept 30 days.
 
 ## Kept on the machine

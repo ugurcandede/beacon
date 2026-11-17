@@ -1,6 +1,7 @@
 """What the apps share about the machine they run on, and the HTTPS context
 they talk through."""
 
+import functools
 import hashlib
 import locale
 import os
@@ -146,6 +147,7 @@ def data_dir(app, company=None) -> Path:
 
 
 _instance_lock = None
+_TOOL_TIMEOUT = 5  # seconds for ioreg, defaults, sysctl: a hung tool must not hang the launch
 
 
 def single_instance(name) -> bool:
@@ -161,12 +163,18 @@ def single_instance(name) -> bool:
     if platform.system() == "Windows":
         import ctypes
 
-        kernel32 = ctypes.windll.kernel32
+        # use_last_error: ctypes keeps the error of this call; GetLastError() later may be another's.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.CreateMutexW.restype = ctypes.c_void_p
         handle = kernel32.CreateMutexW(None, False, f"Local\\beacon-{name}")
-        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        error = ctypes.get_last_error()
+        if handle and error == 183:  # ERROR_ALREADY_EXISTS
             kernel32.CloseHandle(ctypes.c_void_p(handle))
             return False
+        if not handle:
+            # No mutex at all. Access denied (5) means another copy holds it with
+            # other rights (one started elevated): that is a running copy too.
+            return error != 5
         _instance_lock = handle
         return True
     import fcntl
@@ -182,6 +190,7 @@ def single_instance(name) -> bool:
     return True
 
 
+@functools.lru_cache(maxsize=1)
 def machine_id() -> str:
     """The same id in every beacon app on this machine, so one person running
     three apps counts once. A salted hash: the hardware UUID never leaves the
@@ -198,7 +207,7 @@ def _hardware_uuid() -> str:
     try:
         if platform.system() == "Darwin":
             out = subprocess.run(["/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
-                                 capture_output=True, text=True).stdout
+                                 capture_output=True, text=True, timeout=_TOOL_TIMEOUT).stdout
             for line in out.splitlines():
                 if "IOPlatformUUID" in line:
                     return line.split("=", 1)[1].strip().strip('"')
@@ -208,7 +217,7 @@ def _hardware_uuid() -> str:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0,
                                 winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
                 return winreg.QueryValueEx(key, "MachineGuid")[0]
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
         pass
     return ""
 
@@ -254,16 +263,18 @@ def _locale() -> str:
 
 def _defaults_locale() -> str:
     try:
-        out = subprocess.run(["/usr/bin/defaults", "read", "-g", "AppleLocale"], capture_output=True, text=True)
-    except OSError:
+        out = subprocess.run(["/usr/bin/defaults", "read", "-g", "AppleLocale"], capture_output=True, text=True,
+                             timeout=_TOOL_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
         return ""
     return out.stdout.strip().split("@")[0]
 
 
 def _sysctl(name) -> str:
     try:
-        return subprocess.run(["/usr/sbin/sysctl", "-n", name], capture_output=True, text=True).stdout.strip()
-    except OSError:
+        return subprocess.run(["/usr/sbin/sysctl", "-n", name], capture_output=True, text=True,
+                              timeout=_TOOL_TIMEOUT).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
         return ""
 
 

@@ -4,6 +4,9 @@ description: >
   the asset, then commits and pushes to the tap.
 
 inputs:
+  config:
+    description: The app's beacon.toml, when it is not at the repository root.
+    default: beacon.toml
   cask:
     description: "The cask's name, e.g. lumea (Casks/lumea.rb); default: cask in beacon.toml."
     default: ""
@@ -26,6 +29,7 @@ runs:
     - shell: bash
       env:
         PYTHONPATH: ${{ github.action_path }}/../../../python
+        CONFIG: ${{ inputs.config }}
         CASK: ${{ inputs.cask }}
         VERSION: ${{ inputs.version }}
         ASSET: ${{ inputs.asset }}
@@ -33,7 +37,7 @@ runs:
         TAP: ${{ inputs.tap }}
       run: |
         PY=python3; [ "$RUNNER_OS" = Windows ] && PY=python
-        CASK=${CASK:-$($PY -m beacon.release config cask)}
+        CASK=${CASK:-$($PY -m beacon.release config cask --config "$CONFIG")}
         if [ -z "$CASK" ]; then echo "::error::no cask input and no cask in beacon.toml"; exit 1; fi
         SHA=$($PY -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$ASSET")
         DIR="$RUNNER_TEMP/beacon-tap"

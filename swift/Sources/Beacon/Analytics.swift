@@ -25,8 +25,12 @@ import Foundation
 public final class Analytics: @unchecked Sendable {
     public static let defaultEndpoint = URL(string: "https://beacon-api.ugurcan-dede.workers.dev/v1/events")!
 
-    static var flushInterval: TimeInterval = 30
-    static var heartbeatInterval: TimeInterval = 300
+    // Changed by tests only, before anything runs.
+    nonisolated(unsafe) static var flushInterval: TimeInterval = 30
+    nonisolated(unsafe) static var heartbeatInterval: TimeInterval = 300
+    /// Answers that are about the batch itself: it is dropped. Any other answer
+    /// (a proxy's 403, a 429, a 5xx) says nothing about it: it waits and goes again.
+    static let rejected: Set<Int> = [400, 413, 422]
     static let sessionIdle: TimeInterval = 30 * 60  // a gap this long (the machine slept) starts a new session
     static let sessionMax: TimeInterval = 24 * 3600
     private static let batchSize = 100
@@ -51,6 +55,10 @@ public final class Analytics: @unchecked Sendable {
     private var sending = false
     /// Events at the head of the queue a send has in its batch: not to be touched.
     var inFlight = 0
+    /// Goes up when the queue is dropped, so a send that was under way deletes nothing after.
+    private var epoch = 0
+    /// The state file is there but cannot be read: nothing is sent or saved this run.
+    private var frozen = false
     /// flushBeforeQuit callers waiting for the send in flight.
     private var afterSend: [(Bool) -> Void] = []
     /// A new install, not an app that already counted this user before it moved to beacon.
@@ -68,16 +76,43 @@ public final class Analytics: @unchecked Sendable {
         self.endpoint = endpoint
         self.version = version
         fileURL = dataDirectory.appendingPathComponent("beacon-analytics.json")
-        self.context = System.context().merging(["app_version": version]) { $1 }.merging(context) { $1 }
+        self.context = System.context().merging(["app_version": version]) { $1 }
+            .merging(Self.jsonable(context) as? [String: Any] ?? [:]) { $1 }
         state = ["install_id": installID ?? UUID().uuidString.lowercased(), "enabled": enabled ?? true,
                  "queue": [[String: Any]]()]
         if let enabled { state["consent"] = enabled }
         newInstall = installID == nil
-        if let data = try? Data(contentsOf: fileURL),
-           let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            state.merge(saved) { $1 }
-            newInstall = false
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }  // the first run
+        newInstall = false
+        guard let data = try? Data(contentsOf: fileURL) else {
+            frozen = true  // locked, no permission: this run does not know the user's choice
+            return
         }
+        if let saved = Self.validState(data) {
+            state.merge(saved) { $1 }
+        } else {
+            // Broken: the user's choice was in it. Off until they choose again
+            // (an app that asks for consent asks again).
+            state["enabled"] = false
+            state["consent"] = nil
+        }
+    }
+
+    /// The state file's content with fields of the wrong type left out, or nil
+    /// when it is not a state at all (cut short, or not an object).
+    static func validState(_ data: Data) -> [String: Any]? {
+        guard let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        var good = saved
+        func keep<T>(_ key: String, _: T.Type) { if good[key] != nil, !(good[key] is T), !(good[key] is NSNull) { good[key] = nil } }
+        keep("install_id", String.self); keep("active_day", String.self); keep("last_version", String.self)
+        keep("running", Bool.self); keep("consent", Bool.self)
+        if saved["enabled"] != nil, !(saved["enabled"] is Bool) { good["enabled"] = false }  // unreadable is not a yes
+        if saved["queue"] != nil {
+            good["queue"] = (saved["queue"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+                .filter { $0["name"] is String && $0["props"] is [String: Any] }
+        }
+        for key in ["install_id", "active_day", "last_version", "consent"] where good[key] is NSNull { good[key] = nil }
+        return good
     }
 
     public var installID: String { queue.sync { state["install_id"] as? String ?? "" } }
@@ -104,11 +139,18 @@ public final class Analytics: @unchecked Sendable {
     }
 
     public var enabled: Bool {
-        get { queue.sync { state["enabled"] as? Bool ?? true } }
+        get { queue.sync { !frozen && state["enabled"] as? Bool ?? true } }
         set {
             queue.sync {
+                guard !frozen else { return }
                 state["enabled"] = newValue
-                if !newValue { state["queue"] = Array(pending.prefix(inFlight)) }
+                if !newValue {
+                    // Everything, also what a send has on its way: if that send
+                    // fails, nothing is left to go out later.
+                    state["queue"] = [[String: Any]]()
+                    inFlight = 0
+                    epoch += 1
+                }
                 save()
             }
         }
@@ -116,7 +158,8 @@ public final class Analytics: @unchecked Sendable {
 
     /// Records app_open (and first_launch or app_updated) and starts sending.
     public func start() {
-        queue.async {
+        // Not async: `updatedFrom` is read right after start() returns.
+        queue.sync {
             if self.state["running"] as? Bool == true {
                 self.append(self.event("unclean_exit", ["version": self.state["last_version"] as? String ?? self.version]))
             }
@@ -140,12 +183,37 @@ public final class Analytics: @unchecked Sendable {
     }
 
     public func track(_ name: String, _ props: [String: Any] = [:]) {
+        // Props are the app's: what is not JSON would raise an Objective-C
+        // exception in JSONSerialization, which `try?` does not catch.
+        let props = Self.jsonable(props) as? [String: Any] ?? [:]
         queue.async { self.append(self.event(name, props)) }
+    }
+
+    /// `value` as JSON can carry it: what is not JSON (a Date, a URL, an enum,
+    /// NaN) goes as text, as the Python client does.
+    static func jsonable(_ value: Any) -> Any {
+        switch value {
+        case let dict as [String: Any]: return dict.mapValues(jsonable)
+        case let list as [Any]: return list.map(jsonable)
+        case is String, is NSNull: return value
+        case let number as NSNumber: return number.doubleValue.isFinite ? number : "\(number.doubleValue)"
+        case let date as Date: return ISO8601DateFormatter().string(from: date)
+        case let url as URL: return url.absoluteString
+        default: return "\(value)"
+        }
     }
 
     /// A window, page or panel the user is looking at: PostHog's $screen.
     public func screen(_ name: String, _ props: [String: Any] = [:]) {
         track("$screen", props.merging(["$screen_name": name]) { $1 })
+    }
+
+    /// Sends what is queued and waits up to `timeout`; the run is not marked as
+    /// ended (for an uncaught exception: the next launch still sees it as unclean).
+    func flush(timeout: TimeInterval = 2) {
+        let done = DispatchSemaphore(value: 0)
+        queue.async { self.sendNext(timeout: timeout) { _ in done.signal() } }
+        _ = done.wait(timeout: .now() + timeout)
     }
 
     /// For applicationWillTerminate: records app_quit with the uptime and
@@ -224,7 +292,8 @@ public final class Analytics: @unchecked Sendable {
     }
 
     private func sendNext(timeout: TimeInterval, completion: ((Bool) -> Void)? = nil) {
-        if requireConsent && state["consent"] == nil {  // not before the user answered
+        // Not before the user answered, and not while turned off.
+        if (requireConsent && state["consent"] == nil) || frozen || state["enabled"] as? Bool == false {
             completion?(false)
             return
         }
@@ -240,8 +309,10 @@ public final class Analytics: @unchecked Sendable {
         }
         sending = true
         inFlight = batch.count
-        post(batch, timeout: timeout) { ok in
+        let epoch = self.epoch
+        post(batch, timeout: timeout) { sent in
             self.queue.async {
+                let ok = sent && epoch == self.epoch  // turned off meanwhile: the queue was dropped already
                 self.sending = false
                 self.inFlight = 0
                 let waiting = self.afterSend
@@ -267,17 +338,19 @@ public final class Analytics: @unchecked Sendable {
         var request = URLRequest(url: endpoint, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        guard JSONSerialization.isValidJSONObject(body) else { return completion(true) }  // unsendable: dropped
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         URLSession.shared.dataTask(with: request) { _, response, _ in
-            // 2xx accepted; 4xx rejected for good -- dropped, or it would block
+            // 2xx accepted; rejected for good -- dropped, or it would block
             // everything queued behind it; anything else retried later.
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            completion((200..<500).contains(status))
+            completion((200..<300).contains(status) || Self.rejected.contains(status))
         }.resume()
     }
 
     private func save() {
-        guard let data = try? JSONSerialization.data(withJSONObject: state) else { return }
+        guard !frozen, JSONSerialization.isValidJSONObject(state),
+              let data = try? JSONSerialization.data(withJSONObject: state) else { return }
         try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: fileURL, options: .atomic)
     }

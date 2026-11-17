@@ -22,6 +22,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import sys
 import threading
 import time
@@ -32,6 +33,8 @@ from . import system
 
 _analytics = None
 _fault_file = None
+_reported = {}  # uncaught exception (type, file, line) -> when it was last sent
+_REPORT_EVERY = 60  # seconds: an exception in a timer slot would fill the queue otherwise
 _MAX_FRAMES = 30
 
 
@@ -130,8 +133,8 @@ def report_crashes(process, data_dir, analytics, reports=CRASH_REPORTS):
         try:
             if path.stat().st_mtime > since:
                 analytics.track("$exception", crash_report_props(path))
-        except (OSError, ValueError, KeyError, IndexError) as e:
-            logging.getLogger("beacon").warning("crash report %s unreadable: %s", path.name, e)
+        except Exception as e:  # whatever is in that file must not stop the app from starting
+            logging.getLogger("beacon").warning("crash report %s unreadable: %r", path.name, e)
 
 
 def crash_report_props(path):
@@ -168,8 +171,17 @@ class _Formatter(logging.Formatter):
 
 
 def _scrub(text):
+    """`text` with the home folder as ~, however the path is written: either
+    slash, doubled backslashes (the repr of a Windows path, as in str(OSError)),
+    any letter case on Windows."""
     home = os.path.expanduser("~")
-    return text.replace(home, "~") if home and home != "~" else text
+    parts = [p for p in re.split(r"[\\/]+", home) if p]
+    if not home or home == "~" or not parts:
+        return text
+    windows = "\\" in home or ":" in parts[0]
+    lead = r"[\\/]+" if home[0] in "\\/" else ""
+    pattern = lead + r"[\\/]+".join(re.escape(p) for p in parts) + r"(?![^\\/\s'\":;,)\]])"
+    return re.sub(pattern, "~", text, flags=re.IGNORECASE if windows else 0)
 
 
 def _excepthook(exc_type, exc, tb):
@@ -182,7 +194,16 @@ def _uncaught(exc_type, exc, tb, thread=None):
     logging.getLogger("beacon").critical("uncaught in %s", thread or "main thread", exc_info=(exc_type, exc, tb))
     if exc is not None and exc.__traceback__ is None:
         exc = exc.with_traceback(tb)
-    if _analytics is not None and exc is not None:
-        _analytics.track("$exception", exception_props(exc, handled=False, **({"thread": thread} if thread else {})))
-        if thread is None:  # the main thread: the app is about to end
-            _analytics.flush(timeout=2)
+    if _analytics is None or exc is None:
+        return
+    # A Qt app calls this for an exception in a slot and keeps running: the same
+    # one from a timer is reported once a minute, and nothing here waits on the
+    # network (the event is saved; the sender thread, or the next launch, sends it).
+    last = traceback.extract_tb(exc.__traceback__)[-1:] or [None]
+    key = (exc_type.__name__, getattr(last[0], "filename", ""), getattr(last[0], "lineno", 0))
+    now = time.monotonic()
+    if now - _reported.get(key, -_REPORT_EVERY) < _REPORT_EVERY:
+        return
+    _reported[key] = now
+    _analytics.track("$exception", exception_props(exc, handled=False, **({"thread": thread} if thread else {})))
+    _analytics._wake.set()

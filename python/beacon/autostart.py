@@ -17,6 +17,14 @@ from pathlib import Path
 from . import update
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+# Where Task Manager's Startup tab keeps "disabled": the entry stays in Run.
+APPROVED_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+
+
+def _approved(data: bytes) -> bool:
+    """Whether a StartupApproved value leaves the entry on: its first byte is even
+    (2, 6) when enabled, odd (3, 7) when the user switched it off."""
+    return not data or data[0] % 2 == 0
 AGENTS = Path.home() / "Library/LaunchAgents"
 
 
@@ -56,7 +64,11 @@ def is_enabled(label, agents=AGENTS):
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
                 winreg.QueryValueEx(key, label)
-                return True
         except FileNotFoundError:  # no Run key, or no value
             return False
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_KEY) as key:
+                return _approved(winreg.QueryValueEx(key, label)[0])
+        except FileNotFoundError:  # never touched in Task Manager
+            return True
     return (agents / f"{label}.plist").is_file()

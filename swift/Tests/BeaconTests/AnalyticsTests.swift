@@ -48,12 +48,12 @@ private extension Analytics {
     #expect(a.durations() == [300, 300])
 }
 
-@Test func disablingKeepsTheBatchBeingSent() {
+@Test func disablingDropsEverythingAlsoTheBatchBeingSent() {
     let a = analytics()
     a.record("sending"); a.record("waiting")
     a.queue.sync { a.inFlight = 1 }
     a.enabled = false
-    #expect(a.names == ["sending"])
+    #expect(a.names.isEmpty)  // privacy.md: turning statistics off deletes what was waiting
 }
 
 @Test(arguments: [(60.0, false), (Analytics.sessionIdle + 1, true)])

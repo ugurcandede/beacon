@@ -41,10 +41,11 @@ def test_next_version_from_git(tmp_path, monkeypatch, capsys):
 
     release.main(["next-version", "--since", before])
     assert capsys.readouterr().out == "tag=v1.1.0\nversion=1.1.0\n"
-    release.main(["next-version", "--since", "0" * 40])  # a new branch: falls back to the last commit
-    assert capsys.readouterr().out == "tag=v1.0.1\nversion=1.0.1\n"
+    # Whatever the push held: every commit since the last release counts, so the feat: is not lost.
+    release.main(["next-version", "--since", "0" * 40])
+    assert capsys.readouterr().out == "tag=v1.1.0\nversion=1.1.0\n"
     release.main(["next-version"])
-    assert capsys.readouterr().out == "tag=v1.0.1\nversion=1.0.1\n"
+    assert capsys.readouterr().out == "tag=v1.1.0\nversion=1.1.0\n"
 
 
 CASK = '''cask "lumea" do

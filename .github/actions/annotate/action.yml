@@ -4,6 +4,9 @@ description: >
   errors or users lines up with the version. Run it after the release is out.
 
 inputs:
+  config:
+    description: The app's beacon.toml, when it is not at the repository root.
+    default: beacon.toml
   app:
     description: The app's name as the reports know it; default name in beacon.toml lower-cased.
     default: ""
@@ -20,10 +23,11 @@ runs:
     - shell: bash
       env:
         PYTHONPATH: ${{ github.action_path }}/../../../python
+        CONFIG: ${{ inputs.config }}
         APP: ${{ inputs.app }}
         VERSION: ${{ inputs.version }}
         POSTHOG_ANNOTATION_KEY: ${{ inputs.key }}
       run: |
         PY=python3; [ "$RUNNER_OS" = Windows ] && PY=python
-        APP=${APP:-$($PY -m beacon.release config name | tr '[:upper:]' '[:lower:]')}
+        APP=${APP:-$($PY -m beacon.release config name --config "$CONFIG" | tr '[:upper:]' '[:lower:]')}
         $PY -m beacon.release annotate --app "$APP" --version "$VERSION"

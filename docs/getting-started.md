@@ -26,7 +26,7 @@ At the app's root. The build and the release workflow read it.
 ```toml
 name = "MyApp"                       # bundle and file names
 id = "com.example.myapp"             # bundle id
-company = "example"                  # optional; part of the data folder and the Windows unpack folder
+company = "example"                  # optional; names the Windows unpack folder
 public_key = "<current public key>"
 cask = "myapp"                       # optional: the Homebrew cask that installs it
 data = ["assets/icon.png"]           # shipped files, read with beacon.system.resource(...)
@@ -46,7 +46,13 @@ icon = "assets/icon.ico"
 include_modules = []                 # modules Nuitka cannot see, on this OS only
 ```
 
-`python -m beacon.build --version 1.0.0` builds for the machine it runs on:
+In the app's `requirements.txt`, pinned to a release (Renovate opens a PR for each new one):
+
+```
+beacon @ git+https://github.com/ugurcandede/beacon@v1.1.0#subdirectory=python
+```
+
+`python -m beacon.build --version 1.0.0` (Python 3.11 or newer) builds for the machine it runs on:
 `<name>-windows-x64.exe` and `<name>-macos-arm64.zip` for Python, one universal
 `<name>-macos.zip` for Swift.
 
@@ -58,11 +64,12 @@ dashboard, in `PRODUCTS` in `posthog/setup.py`.
 ### Python (PySide6)
 
 ```python
-from beacon import log, qt, system
+from beacon import log, qt, system, update
 from beacon.analytics import Analytics
 from beacon.flags import Flags
 from beacon.update import Updater
 
+update.wait_for_previous()                       # first: after an update the old copy is still exiting (Windows)
 data_dir = system.data_dir("MyApp", "example")
 analytics = Analytics("myapp", VERSION, data_dir, require_consent=True)
 log.setup("myapp", data_dir, analytics)          # log file, uncaught errors, crash reports
@@ -82,7 +89,7 @@ updates.installed.connect(app.quit)              # the new build is starting
 updates.check()                                  # check(manual=True) from "Check for updates"
 # banner: updates.install(release), updater.skip(release); no skip when release.required
 
-flags = qt.QtFlags(Flags("myapp", data_dir))
+flags = qt.QtFlags(Flags("myapp", data_dir, analytics=analytics))   # asked only with the user's consent
 flags.refreshed.connect(apply_flags)
 flags.refresh()
 
@@ -98,7 +105,7 @@ zip), `autostart.enable(label)`, `updater.channel = "beta"`, `updater.release_no
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/ugurcandede/beacon", from: "1.0.0")
+.package(url: "https://github.com/ugurcandede/beacon", exact: "1.1.0")   // Renovate opens a PR for each release
 .product(name: "Beacon", package: "beacon")
 ```
 
@@ -110,7 +117,8 @@ let analytics = Analytics(app: "myapp", version: version, dataDirectory: dataDir
 Log.setup(app: "myapp", dataDirectory: dataDir, analytics: analytics)
 analytics.start()
 analytics.ready()
-// while analytics.consentNeeded: ConsentView(analytics: analytics, appName: "MyApp", privacyURL: url)
+// @State var asking = analytics.consentNeeded
+// if asking { ConsentView(analytics: analytics, appName: "MyApp", privacyURL: url) { _ in asking = false } }
 
 let updater = try Updater(repo: "me/myapp", version: version, publicKeys: [publicKey, nextPublicKey],
                           dataDirectory: dataDir, cask: "myapp", analytics: analytics)
@@ -118,7 +126,7 @@ updater.cleanup()
 let updates = UpdateModel(updater: updater)      // in a view: UpdateBanner(model: updates)
 await updates.check()
 
-let flags = Flags(app: "myapp", dataDirectory: dataDir)
+let flags = Flags(app: "myapp", dataDirectory: dataDir, analytics: analytics)
 await flags.refresh()
 // applicationWillTerminate: analytics.flushBeforeQuit()
 ```
@@ -136,7 +144,7 @@ on:
   push:
     branches: [main]
     paths-ignore: ["**/*.md", "docs/**"]
-concurrency: { group: release, cancel-in-progress: false }
+concurrency: { group: release, cancel-in-progress: false }   # one release at a time
 
 jobs:
   release:
@@ -152,8 +160,10 @@ jobs:
       annotation-key: ${{ secrets.POSTHOG_ANNOTATION_KEY }}  # optional: marks the release in PostHog
 ```
 
-The version comes from the commit messages: `feat:` is a minor, `BREAKING:` a major, anything
-else a patch. Other inputs: `rollout`, `min-version`, `channel: beta`, `path`, `pre-build`
+The version comes from every commit since the last release: `feat:` or `feat(scope):` is a minor,
+`BREAKING:` or a `!` (`feat!:`) a major, anything else a patch. Re-running a release whose tag
+exists finishes that release; it does not make another. The workflow and the actions are used at `@v1`, which follows every 1.x release. Other inputs:
+`rollout`, `min-version`, `channel: beta`, `path`, `pre-build`
 ([api.md](api.md#build-and-release)).
 
 `.github/workflows/release-control.yml`, to pause or widen a release from GitHub:
@@ -167,6 +177,7 @@ on:
       value: { description: "percent for rollout, version for min-version", default: "" }
       channel: { type: choice, options: [stable, beta], default: stable }
 permissions: { contents: write }
+concurrency: { group: release, cancel-in-progress: false }   # never while a release is being made
 jobs:
   control:
     runs-on: ubuntu-latest
@@ -178,6 +189,7 @@ jobs:
           value: ${{ inputs.value }}
           channel: ${{ inputs.channel }}
           signing-key: ${{ secrets.BEACON_SIGNING_KEY }}
+          # config: app/beacon.toml          # when beacon.toml is not at the repository root
 ```
 
 Before the first release, run through [the end-to-end checklist](testing.md#an-app-end-to-end)

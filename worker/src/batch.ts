@@ -27,18 +27,41 @@ export interface Batch {
 
 const MAX_EVENTS = 100;
 
-export function valid(batch: Batch | null, env: Env): batch is Batch {
+const MAX_TIME = 8.64e15; // the last millisecond a Date can hold
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const isTime = (v: unknown) => typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= MAX_TIME;
+
+/** Whatever was posted is checked here in full: nothing after this may throw on it. */
+export function valid(batch: unknown, env: Env): batch is Batch {
+  if (!isObject(batch)) return false;
+  const b = batch as Partial<Batch>;
   return (
-    batch !== null &&
-    env.APPS.split(",").includes(batch.app) &&
-    typeof batch.install_id === "string" &&
-    (batch.machine_id === undefined || typeof batch.machine_id === "string") &&
-    (batch.sent_at === undefined || typeof batch.sent_at === "number") &&
-    typeof batch.context === "object" &&
-    Array.isArray(batch.events) &&
-    batch.events.length <= MAX_EVENTS &&
-    batch.events.every((e) => typeof e.name === "string" && typeof e.ts === "number")
+    typeof b.app === "string" &&
+    env.APPS.split(",").includes(b.app) &&
+    typeof b.install_id === "string" &&
+    (b.machine_id === undefined || typeof b.machine_id === "string") &&
+    (b.machine_id || b.install_id) !== "" && // someone to count it under
+    (b.sent_at === undefined || isTime(b.sent_at)) &&
+    isObject(b.context) &&
+    Array.isArray(b.events) &&
+    b.events.length <= MAX_EVENTS &&
+    b.events.every(
+      (e) => isObject(e) && typeof e.name === "string" && e.name !== "" && isTime(e.ts) && (e.props === undefined || isObject(e.props)),
+    )
   );
+}
+
+// PostHog reads these as instructions about people (merge two, forget a property),
+// not as something that happened: an app's batch may not carry them.
+const OWN_EVENTS = new Set(["$screen", "$exception"]);
+const RESERVED_PROPS = ["$set", "$set_once", "$unset", "$groups", "$ip", "$anon_distinct_id", "$process_person_profile"];
+// `$set` is the exception: an app may keep its own settings on the person; the machine context wins a clash.
+const personProps = (props: Record<string, unknown> | undefined) => (isObject(props?.$set) ? props.$set : {});
+
+function ownProps(props: Record<string, unknown> | undefined) {
+  const out = { ...props };
+  for (const key of RESERVED_PROPS) delete out[key];
+  return out;
 }
 
 /** The body for PostHog's /batch/, without the api_key. With sent_at, PostHog
@@ -69,13 +92,22 @@ export function toPostHog(batch: Batch, cf: IncomingRequestCfProperties | undefi
   };
   return {
     sent_at: batch.sent_at === undefined ? undefined : iso(batch.sent_at),
-    batch: batch.events.map((e) => ({
-      event: e.name,
-      uuid: e.uuid,
-      distinct_id: batch.machine_id || batch.install_id, // "" when the OS would not say
-      timestamp: iso(e.ts),
-      properties: { ...e.props, ...common, $app_version: e.app_version ?? ctx.app_version, $session_id: e.session_id },
-    })),
+    batch: batch.events
+      .filter((e) => !e.name.startsWith("$") || OWN_EVENTS.has(e.name))
+      .map((e) => ({
+        event: e.name,
+        uuid: e.uuid,
+        distinct_id: batch.machine_id || batch.install_id, // "" when the OS would not say
+        timestamp: iso(e.ts),
+        // `common` last: an app cannot pass for another product or channel.
+        properties: {
+          ...ownProps(e.props),
+          ...common,
+          $set: { ...personProps(e.props), ...common.$set },
+          $app_version: e.app_version ?? ctx.app_version,
+          $session_id: e.session_id,
+        },
+      })),
   };
 }
 
@@ -87,14 +119,10 @@ function geo(cf: IncomingRequestCfProperties | undefined) {
   if (!cf) return { $geoip_disable: true };
   return {
     $geoip_disable: true,
+    // Country, region and city, as docs/privacy.md says: no postal code, no coordinates.
     $geoip_country_code: cf.country,
-    $geoip_continent_code: cf.continent,
     $geoip_subdivision_1_code: cf.regionCode,
     $geoip_subdivision_1_name: cf.region,
     $geoip_city_name: cf.city,
-    $geoip_postal_code: cf.postalCode,
-    $geoip_latitude: cf.latitude ? Number(cf.latitude) : undefined,
-    $geoip_longitude: cf.longitude ? Number(cf.longitude) : undefined,
-    $geoip_time_zone: cf.timezone,
   };
 }

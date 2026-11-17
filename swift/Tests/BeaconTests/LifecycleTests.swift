@@ -59,7 +59,7 @@ private func temporary() -> URL { FileManager.default.temporaryDirectory.appendi
     let dir = temporary()
     defer { try? FileManager.default.removeItem(at: dir) }
     let model = UpdateModel(updater: try updater(dir, serving: false))
-    await model.check()
+    await model.check(manual: true)  // the user asked; an automatic check that fails says nothing
     guard case .failed = model.state else { Issue.record("expected failed: \(model.state)"); return }
 }
 

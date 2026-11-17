@@ -4,7 +4,7 @@ name: CI
 # it passed:
 #   1. fast tests     python (macOS, Windows) + dashboards, swift, worker
 #   2. heavy checks   the release actions as an app's release job runs them, and
-#                     the reusable app release on both demos;
+#                     the reusable app release on both demos (every push);
 #                     the Windows self-update end to end (Nuitka)
 #   3. deploy         the Worker, on main only
 # release.yml runs stages 1 and 2 before releasing beacon itself.
@@ -47,6 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: swift test   # Package.swift is at the root
+      - name: The sources also compile in Swift 6 mode
+        run: xcrun swiftc -typecheck -swift-version 6 swift/Sources/Beacon/*.swift
       - name: An app can depend on it by URL
         run: |
           app="$RUNNER_TEMP/consumer"
@@ -334,34 +336,9 @@ jobs:
           PY
           grep -q "release view" gh-calls.log  # no tag given: the latest release
 
-  changes:
-    # The demo releases are three long builds (macOS minutes count ten times on a
-    # private repo): only when what they test changed, or when not a plain push.
-    runs-on: ubuntu-latest
-    outputs:
-      release: ${{ steps.diff.outputs.release }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - id: diff
-        env:
-          EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          if [ "$EVENT" != push ] && [ "$EVENT" != pull_request ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            release=true  # a new branch, a tag, a manual or a called run: everything
-          elif git diff --name-only "$BEFORE" HEAD | grep -qE '^(\.github/|examples/|python/beacon/(build|release)\.py$|python/pyproject\.toml$|Package\.swift$)'; then
-            release=true
-          else
-            release=false
-          fi
-          echo "release=$release" | tee -a "$GITHUB_OUTPUT"
-
   app-release-python:
     # The reusable app release on the Python demo, macOS and Windows; nothing published.
-    needs: [python, swift, worker, changes]
-    if: needs.changes.outputs.release == 'true'
+    needs: [python, swift, worker]
     uses: ./.github/workflows/app-release.yml
     with:
       path: examples/demo-python
@@ -373,8 +350,7 @@ jobs:
 
   app-release-swift:
     # The same on the Swift demo: one universal .app.
-    needs: [python, swift, worker, changes]
-    if: needs.changes.outputs.release == 'true'
+    needs: [python, swift, worker]
     uses: ./.github/workflows/app-release.yml
     with:
       path: examples/demo-swift
@@ -410,8 +386,7 @@ jobs:
     # and only once everything above passed.
     needs: [release-manifest, release-version, release-cask, release-codesign, release-control,
             app-release-python, app-release-swift, windows-e2e]
-    # Skipped demo releases count as passed; a failed or cancelled job stops it.
-    if: ${{ !failure() && !cancelled() && github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     concurrency:
       group: worker-deploy

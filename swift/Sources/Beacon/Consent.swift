@@ -17,17 +17,21 @@ public struct ConsentView: View {
         self.onAnswer = onAnswer
     }
 
+    /// What the prompt says is sent; the same words as the Qt prompt.
+    static let text = "Send anonymous usage statistics and error reports: how the app is used and which version, "
+        + "an id for this machine, its model, OS and screen size, your country, region and city, "
+        + "and the text of errors. Never your files, what you type, or your name."
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Help improve \(appName)?").font(.headline)
-            Text("Send anonymous usage statistics and error reports: how the app is used, which version, "
-                 + "the OS and the country -- never your files, typed text or names. "
-                 + "You can change this in the settings at any time.")
+            Text(Self.text + " You can change this in the settings at any time.")
                 .font(.caption).fixedSize(horizontal: false, vertical: true)
             Link("What is collected", destination: privacyURL).font(.caption)
             HStack {
+                // No default button: a stray Return is not a yes.
                 Button("Don't send") { answer(false) }
-                Button("Send") { answer(true) }.keyboardShortcut(.defaultAction)
+                Button("Send") { answer(true) }
             }
         }
         .padding()

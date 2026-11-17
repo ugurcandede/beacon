@@ -25,6 +25,11 @@ UI = f"https://eu.posthog.com/project/{PROJECT}"
 # Products with an app sending through beacon: one dashboard each. The sites
 # use the same names for the product pages; `home` and `tools` are site-only.
 PRODUCTS = {"lumea": "Lumea", "sotto": "sotto", "taplock": "TapLock"}
+# Products whose released app sends through beacon: their "silent" alert is on.
+# Until then nobody would be there to be silent, and the alert would fire daily.
+LIVE = set()
+# Tile names this script used before a rename: still its own, removed on the next run.
+RETIRED = set()
 SITES = {"apps": "https://ugurcandede.github.io/apps", "portfolio": "https://ugurcandede.github.io"}
 
 # Recorded by beacon or PostHog themselves; "what people do" leaves them out.
@@ -92,6 +97,11 @@ def lifecycle(props=()):
 # For insights it is a test-account filter (settings()); a HogQL tile adds it to
 # each of its FROM events WHERE clauses.
 REAL_PRODUCT = "not endsWith(coalesce(properties.product, ''), '-test')"
+
+
+def leaves_test_products_out(query):
+    """Whether every `from events` in a SQL tile carries REAL_PRODUCT (test_setup.py checks each tile)."""
+    return query.count("from events") == query.count(REAL_PRODUCT) > 0
 
 
 def sql(query, display="ActionsTable"):
@@ -376,7 +386,7 @@ def health():
 
 # (dashboard, tile, alert name, bounds, interval, enabled). An alert runs its
 # insight on its own, so the tile's query must hold every filter it needs.
-# The "sessiz" ones stay off until the product sends through beacon. The free
+# The "sessiz" ones stay off until the product is in LIVE. The free
 # plan allows 5 alerts: "Hatalar" covers crashes too (macOS crash reports
 # arrive as $exception).
 ALERT_LIMIT = 5
@@ -390,7 +400,7 @@ def alerts():
     ]
     for title in PRODUCTS.values():
         out.append((title, "Aktif kullanıcı: gün, hafta, ay", f"{title} sessiz: bugün hiç kullanıcı yok",
-                    {"lower": 1}, "daily", False))
+                    {"lower": 1}, "daily", title in {PRODUCTS[p] for p in LIVE}))
     return out
 
 
@@ -463,24 +473,30 @@ def tiles_with_layout(tiles):
         x, row = x + w, max(row, h)
 
 
+def owned(current, titles, retired):
+    """The tiles on a dashboard this script made: its text tiles, and insights
+    named like one of its tiles (now, or before a rename: RETIRED). An insight
+    someone added by hand has another name and stays."""
+    return [t for t in current if t.get("text") or (t.get("insight") or {}).get("name") in titles | retired]
+
+
 def build(name, description, tiles, filters, existing):
     dashboard = existing.get(name)
     if dashboard is None:
         dashboard = call("POST", "/dashboards/", {"name": name})
     did = dashboard["id"]
-    # Start over: what this script made last time goes (insights are soft-deleted).
-    current = call("GET", f"/dashboards/{did}/")
-    for tile in current.get("tiles") or []:
-        if tile.get("insight"):
-            call("PATCH", f"/insights/{tile['insight']['id']}/", {"deleted": True})
-    call("PATCH", f"/dashboards/{did}/", {"tiles": [{"id": t["id"], "deleted": True} for t in current.get("tiles") or []]})
+    titles = {t[0] for t in tiles if not isinstance(t, str)}
+    old = owned(call("GET", f"/dashboards/{did}/").get("tiles") or [], titles, RETIRED)
     call("PATCH", f"/dashboards/{did}/", {
         "description": description, "pinned": True, "filters": {"properties": filters or []}})
+    # The new tiles first, the old ones after: a run that fails half way leaves
+    # the dashboard showing what it showed (plus some new tiles), never half empty.
     layout = []
     for tile, place in tiles_with_layout(tiles):
         if isinstance(tile, str):
+            before = {t["id"] for t in call("GET", f"/dashboards/{did}/").get("tiles") or []}
             r = call("PATCH", f"/dashboards/{did}/", {"tiles": [{"text": {"body": tile}, "color": None}]})
-            layout.append((max(t["id"] for t in r["tiles"] if (t.get("text") or {}).get("body") == tile), place))
+            layout.append((max(t["id"] for t in r["tiles"] if t["id"] not in before), place))
         else:
             title, about, query, _, _ = tile
             insight = call("POST", "/insights/", {"name": title, "description": about, "query": query,
@@ -490,6 +506,11 @@ def build(name, description, tiles, filters, existing):
                 fresh = call("GET", f"/dashboards/{did}/")
                 tid = next(t["id"] for t in fresh["tiles"] if (t.get("insight") or {}).get("id") == insight["id"])
             layout.append((tid, place))
+    for tile in old:  # what this script made last time (insights are soft-deleted)
+        if tile.get("insight"):
+            call("PATCH", f"/insights/{tile['insight']['id']}/", {"deleted": True})
+    if old:
+        call("PATCH", f"/dashboards/{did}/", {"tiles": [{"id": t["id"], "deleted": True} for t in old]})
     call("PATCH", f"/dashboards/{did}/", {"tiles": [{"id": tid, "layouts": {"sm": place}} for tid, place in layout]})
     return did
 

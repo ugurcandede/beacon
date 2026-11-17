@@ -40,10 +40,12 @@ private func manifest(_ c: ManifestCase) throws {
     let signature = Data(base64Encoded: sigText)!
     let keys = try c.keys.map { try Curve25519.Signing.PublicKey(rawRepresentation: Data(base64Encoded: $0)!) }
     if let step = c.error {
-        #expect(throws: UpdateError.self) {
-            try Updater.parseManifest(data, signature: signature, keys: keys, current: c.current, machineID: c.machine_id ?? "")
+        do {
+            _ = try Updater.parseManifest(data, signature: signature, keys: keys, current: c.current, machineID: c.machine_id ?? "")
+            Issue.record("\(c.file): accepted, expected \(step)")
+        } catch let error as UpdateError {
+            #expect(error.step.rawValue == step)  // the step the code gives, against the vector's
         }
-        #expect(step == "verify")
         return
     }
     let release = try Updater.parseManifest(data, signature: signature, keys: keys, current: c.current,

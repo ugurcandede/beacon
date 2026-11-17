@@ -2,11 +2,12 @@
   <img src="docs/assets/icon.svg" alt="beacon" width="80">
   <h1>beacon</h1>
   <p>Self-update, releases, analytics and crash reports for desktop apps, in Python and Swift.</p>
+  <p><sub>The foundation of my own apps: the source is here to read, the setup it describes is mine.</sub></p>
   <br>
   <a href="https://github.com/ugurcandede/beacon/releases/latest"><img src="https://img.shields.io/github/v/release/ugurcandede/beacon?label=version&style=flat-square" alt="Version"></a>
   <a href="https://github.com/ugurcandede/beacon/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ugurcandede/beacon/ci.yml?branch=main&style=flat-square" alt="CI"></a>
   <br>
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/Swift-6.0-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift">
   <img src="https://img.shields.io/badge/macOS-13%2B-000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
   <img src="https://img.shields.io/badge/Windows-10%2B-0078D4?style=flat-square" alt="Windows">
@@ -32,11 +33,11 @@
 ## Install
 
 ```bash
-pip install "beacon @ git+https://github.com/ugurcandede/beacon@v1#subdirectory=python"
+pip install "beacon @ git+https://github.com/ugurcandede/beacon@v1.1.0#subdirectory=python"
 ```
 
 ```swift
-.package(url: "https://github.com/ugurcandede/beacon", from: "1.0.0")
+.package(url: "https://github.com/ugurcandede/beacon", exact: "1.1.0")
 ```
 
 Setting up an app takes a key pair, a `beacon.toml`, a few lines of code and a release workflow:
