@@ -1,0 +1,27 @@
+{
+  "version": "1.2.0",
+  "notes_url": "https://github.com/me/app/releases/tag/v1.2.0",
+  "assets": {
+    "macos-arm64": {
+      "url": "https://github.com/me/app/releases/download/v1.2.0/App-macos-arm64",
+      "size": 12,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "macos-x64": {
+      "url": "https://github.com/me/app/releases/download/v1.2.0/App-macos-x64",
+      "size": 12,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "windows-x64": {
+      "url": "https://github.com/me/app/releases/download/v1.2.0/App-windows-x64",
+      "size": 12,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "windows-arm64": {
+      "url": "https://github.com/me/app/releases/download/v1.2.0/App-windows-arm64",
+      "size": 12,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "rollout": 30
+}

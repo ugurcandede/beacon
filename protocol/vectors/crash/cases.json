@@ -1,0 +1,97 @@
+{
+  "note": "A macOS crash report (.ips: one JSON header line, then a JSON body) and the $exception props both clients send for it on the next start. Frames are the faulting thread's, top first, at most 30; in_app: the frame's image is the crashed process. value: the termination indicator, else the exception subtype (a segfault has no indicator), else the signal.",
+  "cases": [
+    {
+      "file": "TapLockApp-2026-11-16-154836.ips",
+      "expected": {
+        "$exception_list": [
+          {
+            "type": "EXC_BREAKPOINT (SIGTRAP)",
+            "value": "Trace/BPT trap: 5",
+            "mechanism": {
+              "handled": false,
+              "synthetic": false
+            },
+            "stacktrace": {
+              "type": "raw",
+              "frames": [
+                {
+                  "function": "_assertionFailure(_:_:file:line:flags:)",
+                  "module": "libswiftCore.dylib",
+                  "in_app": false,
+                  "platform": "native"
+                },
+                {
+                  "function": "InputBlocker.start()",
+                  "module": "TapLockApp",
+                  "in_app": true,
+                  "platform": "native",
+                  "filename": "InputBlocker.swift",
+                  "lineno": 163
+                },
+                {
+                  "function": "MenuBarViewModel.lock()",
+                  "module": "TapLockApp",
+                  "in_app": true,
+                  "platform": "native"
+                },
+                {
+                  "function": "_pthread_start",
+                  "module": "libsystem_pthread.dylib",
+                  "in_app": false,
+                  "platform": "native"
+                }
+              ]
+            }
+          }
+        ],
+        "$exception_level": "fatal",
+        "crash_report": true,
+        "crashed_version": "1.10.0",
+        "crashed_at": "2026-11-16 15:48:36.5121 +0300"
+      }
+    },
+    {
+      "file": "Lumea-test-2026-11-17-191558.ips",
+      "expected": {
+        "$exception_list": [
+          {
+            "type": "EXC_BAD_ACCESS (SIGSEGV)",
+            "value": "KERN_INVALID_ADDRESS at 0x0000000000000000",
+            "mechanism": {
+              "handled": false,
+              "synthetic": false
+            },
+            "stacktrace": {
+              "type": "raw",
+              "frames": [
+                {
+                  "function": "_platform_strlen",
+                  "module": "libsystem_platform.dylib",
+                  "in_app": false,
+                  "platform": "native"
+                },
+                {
+                  "function": "PyBytes_FromString",
+                  "module": "Python",
+                  "in_app": false,
+                  "platform": "native"
+                },
+                {
+                  "function": "main",
+                  "module": "Lumea-test",
+                  "in_app": true,
+                  "platform": "native"
+                }
+              ]
+            }
+          }
+        ],
+        "$exception_level": "fatal",
+        "crash_report": true,
+        "crashed_version": "1.2.0",
+        "crashed_at": "2026-11-17 19:15:58.0000 +0300"
+      }
+    }
+  ]
+}

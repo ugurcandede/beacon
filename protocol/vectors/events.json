@@ -1,0 +1,277 @@
+{
+  "batch_fields": [
+    "app",
+    "install_id",
+    "machine_id",
+    "sent_at",
+    "context",
+    "events"
+  ],
+  "event_fields": [
+    "name",
+    "props",
+    "ts",
+    "session_id",
+    "app_version",
+    "uuid"
+  ],
+  "context_fields": [
+    "app_version",
+    "os",
+    "os_version",
+    "arch",
+    "locale",
+    "cpu_count",
+    "memory_gb",
+    "screen_width",
+    "screen_height",
+    "screen_count",
+    "lib",
+    "lib_version"
+  ],
+  "context_fields_macos": [
+    "model"
+  ],
+  "valid": {
+    "app": "lumea",
+    "install_id": "4a3c6f0e-2b1d-4e8f-9a7c-5d6e7f8a9b0c",
+    "context": {
+      "app_version": "1.4.0",
+      "os": "macOS",
+      "os_version": "15.1",
+      "arch": "arm64",
+      "locale": "tr_TR",
+      "cpu_count": 10,
+      "memory_gb": 16,
+      "model": "Mac15,6",
+      "screen_width": 1512,
+      "screen_height": 982,
+      "screen_count": 2,
+      "lib": "beacon-swift",
+      "lib_version": "0.2.0"
+    },
+    "events": [
+      {
+        "name": "effect_changed",
+        "props": {
+          "effect": "rainbow"
+        },
+        "ts": 1761600000000,
+        "session_id": "019a2a3b-0000-7000-8000-000000000001",
+        "app_version": "1.3.0",
+        "uuid": "019a2a3b-0000-7000-8000-000000000002"
+      },
+      {
+        "name": "$screen",
+        "props": {
+          "$screen_name": "Settings"
+        },
+        "ts": 1761600030000,
+        "session_id": "019a2a3b-0000-7000-8000-000000000001",
+        "app_version": "1.4.0",
+        "uuid": "019a2a3b-0000-7000-8000-000000000003"
+      }
+    ],
+    "machine_id": "2b0f529265bce60d2be3eb111112169f",
+    "sent_at": 1761600060000
+  },
+  "cf": {
+    "country": "TR",
+    "continent": "AS",
+    "regionCode": "16",
+    "region": "Bursa",
+    "city": "Bursa",
+    "postalCode": "16000",
+    "latitude": "40.18",
+    "longitude": "29.06",
+    "timezone": "Europe/Istanbul"
+  },
+  "posthog": {
+    "sent_at": "2025-10-27T21:21:00.000Z",
+    "batch": [
+      {
+        "event": "effect_changed",
+        "uuid": "019a2a3b-0000-7000-8000-000000000002",
+        "distinct_id": "2b0f529265bce60d2be3eb111112169f",
+        "timestamp": "2025-10-27T21:20:00.000Z",
+        "properties": {
+          "effect": "rainbow",
+          "app": "lumea",
+          "product": "lumea",
+          "channel": "app",
+          "$app_name": "lumea",
+          "install_id": "4a3c6f0e-2b1d-4e8f-9a7c-5d6e7f8a9b0c",
+          "$os": "macOS",
+          "$os_version": "15.1",
+          "$device_type": "Desktop",
+          "$device_model": "Mac15,6",
+          "$locale": "tr_TR",
+          "$screen_width": 1512,
+          "$screen_height": 982,
+          "$lib": "beacon-swift",
+          "$lib_version": "0.2.0",
+          "$geoip_disable": true,
+          "$geoip_country_code": "TR",
+          "$geoip_continent_code": "AS",
+          "$geoip_subdivision_1_code": "16",
+          "$geoip_subdivision_1_name": "Bursa",
+          "$geoip_city_name": "Bursa",
+          "$geoip_postal_code": "16000",
+          "$geoip_latitude": 40.18,
+          "$geoip_longitude": 29.06,
+          "$geoip_time_zone": "Europe/Istanbul",
+          "$set": {
+            "app_version": "1.4.0",
+            "os": "macOS",
+            "os_version": "15.1",
+            "arch": "arm64",
+            "locale": "tr_TR",
+            "cpu_count": 10,
+            "memory_gb": 16,
+            "model": "Mac15,6",
+            "screen_width": 1512,
+            "screen_height": 982,
+            "screen_count": 2,
+            "lib": "beacon-swift",
+            "lib_version": "0.2.0",
+            "last_app": "lumea"
+          },
+          "$set_once": {
+            "first_app": "lumea"
+          },
+          "$app_version": "1.3.0",
+          "$session_id": "019a2a3b-0000-7000-8000-000000000001"
+        }
+      },
+      {
+        "event": "$screen",
+        "uuid": "019a2a3b-0000-7000-8000-000000000003",
+        "distinct_id": "2b0f529265bce60d2be3eb111112169f",
+        "timestamp": "2025-10-27T21:20:30.000Z",
+        "properties": {
+          "$screen_name": "Settings",
+          "app": "lumea",
+          "product": "lumea",
+          "channel": "app",
+          "$app_name": "lumea",
+          "install_id": "4a3c6f0e-2b1d-4e8f-9a7c-5d6e7f8a9b0c",
+          "$os": "macOS",
+          "$os_version": "15.1",
+          "$device_type": "Desktop",
+          "$device_model": "Mac15,6",
+          "$locale": "tr_TR",
+          "$screen_width": 1512,
+          "$screen_height": 982,
+          "$lib": "beacon-swift",
+          "$lib_version": "0.2.0",
+          "$geoip_disable": true,
+          "$geoip_country_code": "TR",
+          "$geoip_continent_code": "AS",
+          "$geoip_subdivision_1_code": "16",
+          "$geoip_subdivision_1_name": "Bursa",
+          "$geoip_city_name": "Bursa",
+          "$geoip_postal_code": "16000",
+          "$geoip_latitude": 40.18,
+          "$geoip_longitude": 29.06,
+          "$geoip_time_zone": "Europe/Istanbul",
+          "$set": {
+            "app_version": "1.4.0",
+            "os": "macOS",
+            "os_version": "15.1",
+            "arch": "arm64",
+            "locale": "tr_TR",
+            "cpu_count": 10,
+            "memory_gb": 16,
+            "model": "Mac15,6",
+            "screen_width": 1512,
+            "screen_height": 982,
+            "screen_count": 2,
+            "lib": "beacon-swift",
+            "lib_version": "0.2.0",
+            "last_app": "lumea"
+          },
+          "$set_once": {
+            "first_app": "lumea"
+          },
+          "$app_version": "1.4.0",
+          "$session_id": "019a2a3b-0000-7000-8000-000000000001"
+        }
+      }
+    ]
+  },
+  "invalid": [
+    {
+      "why": "unknown app",
+      "patch": {
+        "app": "not-an-app"
+      }
+    },
+    {
+      "why": "no install id",
+      "patch": {
+        "install_id": null
+      }
+    },
+    {
+      "why": "events not a list",
+      "patch": {
+        "events": {}
+      }
+    },
+    {
+      "why": "event without a name",
+      "patch": {
+        "events": [
+          {
+            "props": {},
+            "ts": 1761600000000
+          }
+        ]
+      }
+    },
+    {
+      "why": "event without a timestamp",
+      "patch": {
+        "events": [
+          {
+            "name": "x",
+            "props": {}
+          }
+        ]
+      }
+    },
+    {
+      "why": "machine_id not a string",
+      "patch": {
+        "machine_id": 7
+      }
+    },
+    {
+      "why": "sent_at not a number",
+      "patch": {
+        "sent_at": "now"
+      }
+    }
+  ],
+  "v1": {
+    "app": "lumea",
+    "install_id": "4a3c6f0e-2b1d-4e8f-9a7c-5d6e7f8a9b0c",
+    "context": {
+      "app_version": "1.0.0",
+      "os": "Windows",
+      "os_version": "10.0.22631",
+      "arch": "x64",
+      "locale": "tr_TR",
+      "cpu_count": 8
+    },
+    "events": [
+      {
+        "name": "app_open",
+        "props": {},
+        "ts": 1761600000000,
+        "session_id": "1761599000"
+      }
+    ]
+  },
+  "v1_note": "A batch from a 0.1 client: no machine_id, sent_at, uuid or app_version per event. The Worker must keep taking it."
+}

@@ -1,0 +1,21 @@
+{
+  "note": "GET /v1/flags?app=<app>&id=<machine_id>: the Worker asks PostHog's /flags/?v=2 (distinct_id = id, person property product = app) and answers with each flag's value (the variant, else true or false) and payload (parsed JSON, or absent). Clients keep the last answer and use it offline.",
+  "posthog": {
+    "flags": {
+      "new-editor": {"key": "new-editor", "enabled": true, "variant": null, "metadata": {"payload": null}},
+      "theme": {"key": "theme", "enabled": true, "variant": "dark", "metadata": {"payload": "{\"accent\": \"#ff6600\"}"}},
+      "kill-sync": {"key": "kill-sync", "enabled": false, "variant": null, "metadata": {"payload": null}}
+    },
+    "errorsWhileComputingFlags": false
+  },
+  "worker": {
+    "flags": {"new-editor": true, "theme": "dark", "kill-sync": false},
+    "payloads": {"theme": {"accent": "#ff6600"}}
+  },
+  "client": [
+    {"key": "new-editor", "enabled": true, "value": true},
+    {"key": "theme", "enabled": true, "value": "dark", "payload": {"accent": "#ff6600"}},
+    {"key": "kill-sync", "enabled": false, "value": false},
+    {"key": "unknown", "enabled": false, "value": null}
+  ]
+}

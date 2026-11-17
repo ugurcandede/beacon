@@ -1,0 +1,114 @@
+{
+  "note": "Each case: verify `file` with `signature` (default <file>.sig) against any of `keys`, as a client running `current` on `machine_id` (default \"\"); expect the release `offered` (and `required`, default false), or an UpdateError `error`.",
+  "cases": [
+    {
+      "file": "update.json",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "1.1.9",
+      "offered": "1.2.0"
+    },
+    {
+      "file": "update.json",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "1.2.0",
+      "offered": null
+    },
+    {
+      "file": "update.json",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "2.0.0",
+      "offered": null
+    },
+    {
+      "file": "update.json",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "dev",
+      "offered": "1.2.0"
+    },
+    {
+      "file": "update.json",
+      "keys": [
+        "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=",
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "1.1.9",
+      "offered": "1.2.0",
+      "why": "rotation: the app has the old and the new key"
+    },
+    {
+      "file": "update.json",
+      "keys": [
+        "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw="
+      ],
+      "current": "1.1.9",
+      "error": "verify",
+      "why": "no matching key"
+    },
+    {
+      "file": "update.json.tampered",
+      "signature": "update.json.sig",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "1.0.0",
+      "error": "verify"
+    },
+    {
+      "file": "paused.json",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "1.1.9",
+      "offered": null,
+      "why": "paused"
+    },
+    {
+      "file": "rollout-30.json",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "1.1.9",
+      "machine_id": "machine-1",
+      "offered": "1.2.0",
+      "why": "bucket 1 < 30"
+    },
+    {
+      "file": "rollout-30.json",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "1.1.9",
+      "machine_id": "machine-0",
+      "offered": null,
+      "why": "bucket 89 >= 30"
+    },
+    {
+      "file": "required.json",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "1.0.5",
+      "offered": "1.2.0",
+      "required": true,
+      "why": "older than min_version 1.1.0: a forced update"
+    },
+    {
+      "file": "required.json",
+      "keys": [
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+      ],
+      "current": "1.1.0",
+      "offered": "1.2.0",
+      "required": false,
+      "why": "at min_version: an ordinary update"
+    }
+  ]
+}

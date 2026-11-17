@@ -1,0 +1,17 @@
+{
+  "note": "machine_id = first 32 hex chars of sha256('beacon-machine:' + raw.strip().upper()); raw is IOPlatformUUID on macOS, MachineGuid on Windows",
+  "cases": [
+    {
+      "raw": "8F0C1B6E-3A2D-4C5B-9E7F-1A2B3C4D5E6F",
+      "machine_id": "2b0f529265bce60d2be3eb111112169f"
+    },
+    {
+      "raw": "8f0c1b6e-3a2d-4c5b-9e7f-1a2b3c4d5e6f",
+      "machine_id": "2b0f529265bce60d2be3eb111112169f"
+    },
+    {
+      "raw": " 0b9e2f3c-aaaa-bbbb-cccc-000000000000\n",
+      "machine_id": "889eaf102c445face21b3500640516ff"
+    }
+  ]
+}

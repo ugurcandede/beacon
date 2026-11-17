@@ -1,0 +1,69 @@
+{"app_name": "TapLock", "timestamp": "2026-11-16 15:48:36.00 +0300", "app_version": "1.10.0", "bundleID": "com.ugurcandede.taplock", "bug_type": "309", "name": "TapLock", "incident_id": "11111111-2222-3333-4444-555555555555"}
+{
+  "procName": "TapLockApp",
+  "procPath": "/Applications/TapLock.app/Contents/MacOS/TapLockApp",
+  "bundleInfo": {
+    "CFBundleShortVersionString": "1.10.0",
+    "CFBundleIdentifier": "com.ugurcandede.taplock"
+  },
+  "captureTime": "2026-11-16 15:48:36.5121 +0300",
+  "exception": {
+    "type": "EXC_BREAKPOINT",
+    "signal": "SIGTRAP",
+    "codes": "0x1, 0x10001f2a4"
+  },
+  "termination": {
+    "namespace": "SIGNAL",
+    "code": 5,
+    "indicator": "Trace/BPT trap: 5",
+    "byProc": "exc handler"
+  },
+  "faultingThread": 1,
+  "usedImages": [
+    {
+      "name": "TapLockApp"
+    },
+    {
+      "name": "libswiftCore.dylib"
+    },
+    {
+      "name": "libsystem_pthread.dylib"
+    }
+  ],
+  "threads": [
+    {
+      "frames": [
+        {
+          "imageIndex": 2,
+          "symbol": "__workq_kernreturn"
+        }
+      ]
+    },
+    {
+      "triggered": true,
+      "frames": [
+        {
+          "imageIndex": 1,
+          "symbol": "_assertionFailure(_:_:file:line:flags:)",
+          "symbolLocation": 156
+        },
+        {
+          "imageIndex": 0,
+          "symbol": "InputBlocker.start()",
+          "symbolLocation": 412,
+          "sourceFile": "InputBlocker.swift",
+          "sourceLine": 163
+        },
+        {
+          "imageIndex": 0,
+          "symbol": "MenuBarViewModel.lock()",
+          "symbolLocation": 88
+        },
+        {
+          "imageIndex": 2,
+          "symbol": "_pthread_start"
+        }
+      ]
+    }
+  ]
+}

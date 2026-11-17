@@ -1,0 +1,7 @@
+[
+  {"candidate": "1.10.0", "current": "1.9.3", "newer": true},
+  {"candidate": "2.0.0", "current": "1.99.99", "newer": true},
+  {"candidate": "1.2", "current": "1.2.0", "newer": false},
+  {"candidate": "1.0.0", "current": "1.0.1", "newer": false},
+  {"candidate": "1.0.0", "current": "dev", "newer": true}
+]
