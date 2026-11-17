@@ -1,0 +1,14 @@
+{
+  "name": "beacon-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  // Per client IP: the apps send at most every 30 seconds each, so 60 a minute
+  // leaves room for several machines behind one address.
+  "ratelimits": [{ "name": "LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } }],
+  "vars": {
+    "POSTHOG_HOST": "https://eu.i.posthog.com",
+    "POSTHOG_KEY": "phc_sfUt8ZHLa6bbUmq2CLjX9ktMhF6hugT6Ad6cKY9vNnx4",
+    "APPS": "beacon-demo-py,beacon-demo-swift,lumea,taplock,sotto"
+  }
+}
