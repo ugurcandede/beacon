@@ -123,9 +123,9 @@ def test_resource_when_compiled(monkeypatch, tmp_path, module_dir, expected):
 def test_builds_the_swift_demo(tmp_path):
     demo = tmp_path / "demo-swift"
     shutil.copytree(ROOT / "examples/demo-swift", demo, ignore=shutil.ignore_patterns(".build", ".swiftpm"))
-    # The demo's Package.swift points at ../../swift; keep that path valid.
+    # The demo's Package.swift points at the repository root, ../..; keep that path valid.
     (demo / "Package.swift").write_text((demo / "Package.swift").read_text().replace(
-        '"../../swift"', f'"{ROOT / "swift"}"'))
+        '"../.."', f'"{ROOT}"'))
     (demo / "demo_config.json").write_text('{"version": "2.0.0"}')
     lines = build.build(build.load(demo / "beacon.toml"), "2.0.0", tmp_path / "dist")
 

@@ -2,7 +2,7 @@
 
 ```sh
 cd python && pytest -q                 # Python
-cd swift && swift test                 # Swift
+swift test                             # Swift (Package.swift at the root)
 cd worker && npm test && npx tsc -p .  # Worker
 cd posthog && pytest -q                # dashboards; POSTHOG_KEY=... python setup.py --check runs every query
 examples/run-local.sh <work-dir>       # macOS self-update end to end (INSTALL=brew for Homebrew)

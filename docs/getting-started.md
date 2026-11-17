@@ -97,6 +97,12 @@ zip), `autostart.enable(label)`, `updater.channel = "beta"`, `updater.release_no
 ### Swift (macOS)
 
 ```swift
+// Package.swift
+.package(url: "https://github.com/ugurcandede/beacon", from: "1.0.0")
+.product(name: "Beacon", package: "beacon")
+```
+
+```swift
 import Beacon
 
 let dataDir = dataDirectory("myapp")

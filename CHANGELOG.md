@@ -30,6 +30,7 @@ here what to change.
 
 - The Worker is `beacon-api`; clients default to `https://beacon-api.ugurcan-dede.workers.dev`.
 - Every log line starts with the local time and its offset.
+- `Package.swift` is at the repository root, so apps depend on the Swift package by URL.
 - Python: `flush_before_quit()` on quit; `system.frozen()` replaces `update.frozen`.
 
 ### Removed

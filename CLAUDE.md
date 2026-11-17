@@ -29,7 +29,7 @@ apps (Python, Swift, later Kotlin).
 
 ```sh
 cd python && pytest -q
-cd swift && swift test
+swift test                       # Swift (Package.swift at the root)
 cd worker && npm test && npx tsc -p .
 cd posthog && pytest -q          # POSTHOG_KEY=... python setup.py --check runs every query
 examples/run-local.sh            # macOS self-update end to end (INSTALL=brew for the Homebrew path)

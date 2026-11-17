@@ -46,8 +46,21 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
-      - run: swift test
-        working-directory: swift
+      - run: swift test   # Package.swift is at the root
+      - name: An app can depend on it by URL
+        run: |
+          app="$RUNNER_TEMP/consumer"
+          mkdir -p "$app/Sources/Consumer"
+          cat > "$app/Package.swift" <<EOF
+          // swift-tools-version: 6.0
+          import PackageDescription
+          let package = Package(
+              name: "Consumer", platforms: [.macOS(.v13)],
+              dependencies: [.package(url: "file://$GITHUB_WORKSPACE", revision: "$GITHUB_SHA")],
+              targets: [.executableTarget(name: "Consumer", dependencies: [.product(name: "Beacon", package: "beacon")])])
+          EOF
+          echo 'import Beacon; print(dataDirectory("consumer").path)' > "$app/Sources/Consumer/main.swift"
+          swift build --package-path "$app"
 
   worker:
     runs-on: ubuntu-latest
@@ -338,7 +351,7 @@ jobs:
         run: |
           if [ "$EVENT" != push ] && [ "$EVENT" != pull_request ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
             release=true  # a new branch, a tag, a manual or a called run: everything
-          elif git diff --name-only "$BEFORE" HEAD | grep -qE '^(\.github/|examples/|python/beacon/(build|release)\.py$|python/pyproject\.toml$|swift/Package\.swift$)'; then
+          elif git diff --name-only "$BEFORE" HEAD | grep -qE '^(\.github/|examples/|python/beacon/(build|release)\.py$|python/pyproject\.toml$|Package\.swift$)'; then
             release=true
           else
             release=false
