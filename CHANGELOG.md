@@ -3,7 +3,7 @@
 beacon follows semver: a minor or patch release never needs a change in the apps; a major says
 here what to change.
 
-## Unreleased
+## 1.0.0
 
 ### Added
 

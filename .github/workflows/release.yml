@@ -1,10 +1,10 @@
 name: Release beacon
 
 # Push a tag v1.4.0 to release beacon itself: the versions must agree
-# (check-version), the CI pipeline's tests and checks pass (no deploy: not main), the Python package goes to PyPI (trusted
-# publishing: the PyPI project must list this workflow), a GitHub release takes
-# the CHANGELOG section as notes, and the major tag (v1) moves here, so apps on
-# `@v1` get the actions' fixes. SwiftPM needs nothing more: the tag is the version.
+# (check-version), the CI pipeline's tests and checks pass (no deploy: not main), a
+# GitHub release takes the CHANGELOG section as notes, and the major tag (v1) moves
+# here, so apps on `@v1` get the actions' fixes. Apps install the packages from the
+# tag (pip: git+...@vX.Y.Z#subdirectory=python; SwiftPM: the tag is the version).
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -26,21 +26,8 @@ jobs:
     uses: ./.github/workflows/ci.yml
     secrets: inherit
 
-  pypi:
-    needs: ci
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v7
-      - run: python3 -m pip install build && python3 -m build python
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: python/dist
-
   github:
-    needs: [check, pypi]
+    needs: [check, ci]
     runs-on: ubuntu-latest
     permissions:
       contents: write

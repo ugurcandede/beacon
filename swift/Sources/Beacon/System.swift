@@ -8,7 +8,7 @@ import IOKit
 enum System {
     /// beacon's own version, sent as lib_version; the Python client's
     /// __version__ is kept the same (ProtocolTests checks).
-    static let libVersion = "0.2.0"
+    static let libVersion = "1.0.0"
 
     static var arch: String {
         #if arch(arm64)
