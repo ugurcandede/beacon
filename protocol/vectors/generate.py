@@ -80,8 +80,8 @@ cases = [
     "cases": cases}, indent=2) + "\n")
 
 buckets = [{"machine_id": m, "version": v, "bucket": bucket(m, v)}
-           for m, v in [("", "1.2.0"), ("acec38d633a3395ac980fd58d39e86ed", "1.2.0"),
-                        ("acec38d633a3395ac980fd58d39e86ed", "1.3.0"), (inside, "1.2.0")]]
+           for m, v in [("", "1.2.0"), ("5e1f3a9c0b7d4e2f8a6c1d3b9e0f7a2c", "1.2.0"),
+                        ("5e1f3a9c0b7d4e2f8a6c1d3b9e0f7a2c", "1.3.0"), (inside, "1.2.0")]]
 (Path(__file__).parent / "rollout.json").write_text(json.dumps({
     "note": "bucket = int(first 8 hex chars of sha256('<machine_id>:<version>'), 16) % 100; "
             "a release with rollout N is offered when bucket < N.", "cases": buckets}, indent=2) + "\n")
